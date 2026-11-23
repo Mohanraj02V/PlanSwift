@@ -1,0 +1,52 @@
+# Source PlanSwift project archives and raw drawing rasters (NEVER commit)
+*.SwiftJob.zip
+*.SwiftJob
+*.Swift
+*.swift
+*.tiff
+*.tif
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Databases & local storage
+*.sqlite3
+*.db
+extracted_tmp/
+exports_output/
+media/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+backend/.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+npm-debug.log*
+
+# Windows .NET connector build outputs
+windows_connector/bin/
+windows_connector/obj/
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

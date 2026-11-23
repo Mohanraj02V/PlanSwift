@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: vortexen_estimator
+      POSTGRES_USER: vortexen
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vortexen_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vortexen -d vortexen_estimator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgresql://vortexen:${POSTGRES_PASSWORD:-vortexen_dev_password}@postgres:5432/vortexen_estimator
+      ENABLE_POSTGIS: "false"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      EXTRACTION_EXECUTION_MODE: celery
+      ALLOWED_SOURCE_ROOTS: /data/planswift_sources
+      SECRET_KEY: ${SECRET_KEY:-dev-docker-secret-key-replace-in-production-50chars}
+    volumes:
+      - ${PLANSWIFT_SOURCE_DIR:-./sources}:/data/planswift_sources:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A config worker --loglevel=info --concurrency=2
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgresql://vortexen:${POSTGRES_PASSWORD:-vortexen_dev_password}@postgres:5432/vortexen_estimator
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      EXTRACTION_EXECUTION_MODE: celery
+      ALLOWED_SOURCE_ROOTS: /data/planswift_sources
+    volumes:
+      - ${PLANSWIFT_SOURCE_DIR:-./sources}:/data/planswift_sources:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pg_data:

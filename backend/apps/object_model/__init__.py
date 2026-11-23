@@ -1,0 +1,1 @@
+"""Canonical object model app."""

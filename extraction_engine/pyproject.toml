@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vortexen-extraction-engine"
+version = "1.0.0"
+description = "PlanSwift Native Project Extraction, Normalization, Reconciliation, and Validation Engine (Zero Rasterization / Zero OCR)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9.0",
+    "lxml>=5.3.0",
+    "defusedxml>=0.7.1",
+    "openpyxl>=3.1.5",
+]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["extraction_engine*"]
