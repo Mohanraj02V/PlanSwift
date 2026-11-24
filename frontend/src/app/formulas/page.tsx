@@ -75,8 +75,10 @@ export default function FormulasPage() {
             className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
           >
             <option value="">All Statuses</option>
-            <option value="computed_by_planswift">computed_by_planswift</option>
+            <option value="calculated">calculated</option>
+            <option value="reconstructed">reconstructed</option>
             <option value="unresolved">unresolved</option>
+            <option value="unsupported">unsupported</option>
           </select>
           <span className="text-xs text-slate-500">{totalCount.toLocaleString()} matching formulas</span>
         </div>
@@ -118,14 +120,14 @@ export default function FormulasPage() {
                 <span className="font-mono text-blue-700">{f.property_name}</span>
               </div>
               <div className="flex items-center gap-2">
-                {f.formula_key.includes(":COM:") && (
-                  <span className="rounded bg-indigo-50 px-2 py-0.5 font-mono font-medium text-indigo-700">
-                    COM runtime
+                {f.calculated_value && (
+                  <span className="rounded bg-teal-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800">
+                    Calculated: {f.calculated_value} {f.calculation_unit || ""}
                   </span>
                 )}
-                {f.planswift_evaluated_value && (
-                  <span className="rounded bg-teal-100 px-2 py-0.5 font-mono font-semibold text-teal-800">
-                    Evaluated: {f.planswift_evaluated_value}
+                {!f.calculated_value && f.calculation_reason && (
+                  <span className="rounded bg-amber-50 px-2 py-0.5 font-mono text-[11px] text-amber-800">
+                    {f.calculation_reason}
                   </span>
                 )}
                 {f.is_pascal_script && <span className="rounded bg-slate-100 px-2 py-0.5 font-mono">PascalScript</span>}

@@ -35,14 +35,51 @@ class FormulaSerializer(serializers.ModelSerializer):
             "circular_path",
             "unresolved_references",
             "evaluation_status",
-            "planswift_evaluated_value",
+            "calculated_value",
+            "calculated_numeric",
+            "calculation_unit",
+            "calculation_reason",
+            "calculation_inputs_json",
             "dependencies",
+        ]
+
+
+class CalculationResultSerializer(serializers.ModelSerializer):
+    object_name = serializers.CharField(source="project_object.name", read_only=True)
+    object_guid = serializers.CharField(source="project_object.native_guid", read_only=True)
+    native_class = serializers.CharField(source="project_object.native_class", read_only=True)
+
+    class Meta:
+        model = Formula
+        fields = [
+            "id",
+            "project_version",
+            "object_guid",
+            "object_name",
+            "native_class",
+            "property_guid",
+            "property_name",
+            "raw_expression",
+            "evaluation_status",
+            "calculated_value",
+            "calculated_numeric",
+            "calculation_unit",
+            "calculation_reason",
+            "calculation_inputs_json",
         ]
 
 
 class FormulaListView(generics.ListAPIView):
     serializer_class = FormulaSerializer
-    filterset_fields = ["project_version", "project_version__project", "is_pascal_script", "has_circular_dependency", "evaluation_status", "property_name"]
+    filterset_fields = [
+        "project_version",
+        "project_version__project",
+        "is_pascal_script",
+        "has_circular_dependency",
+        "evaluation_status",
+        "calculation_reason",
+        "property_name",
+    ]
     search_fields = ["property_name", "raw_expression", "project_object__name", "project_object__native_guid"]
     ordering_fields = ["evaluation_status", "property_name", "is_pascal_script"]
 
@@ -56,6 +93,7 @@ class FormulaListView(generics.ListAPIView):
             qs = qs.filter(
                 property_name__in=[
                     "Qty",
+                    "Qty Formula",
                     "Takeoff",
                     "Takeoff %",
                     "Point Count",
@@ -63,6 +101,7 @@ class FormulaListView(generics.ListAPIView):
                     "Area",
                     "Volume",
                     "Wall Area",
+                    "Pitch Factor",
                     "Section Count",
                     "Segment Count",
                     "Line Width",
@@ -88,24 +127,23 @@ class FormulaListView(generics.ListAPIView):
                 priority=Case(
                     When(
                         property_name__in=[
+                            "Qty",
+                            "Qty Formula",
+                            "Wall Area",
+                            "Area",
+                            "Linear Total",
                             "Cost Total",
                             "Price Total",
-                            "Price Each",
-                            "Markup Each",
-                            "Markup Total",
                             "Volume",
-                            "Wall Area",
                         ],
                         then=Value(1),
                     ),
                     When(
                         property_name__in=[
-                            "Qty",
                             "Takeoff",
                             "Takeoff %",
                             "Point Count",
-                            "Linear Total",
-                            "Area",
+                            "Pitch Factor",
                             "Section Count",
                             "Segment Count",
                             "Line Width",
@@ -128,4 +166,27 @@ class FormulaListView(generics.ListAPIView):
         )
 
 
-urlpatterns = [path("", FormulaListView.as_view(), name="formula-list")]
+class FormulaCalculationListView(generics.ListAPIView):
+    serializer_class = CalculationResultSerializer
+    filterset_fields = [
+        "project_version",
+        "project_version__project",
+        "evaluation_status",
+        "calculation_reason",
+        "property_name",
+    ]
+    search_fields = ["property_name", "raw_expression", "calculated_value", "project_object__name"]
+
+    def get_queryset(self):
+        org_ids = get_user_org_ids(self.request.user)
+        return (
+            Formula.objects.filter(project_version__project__organization_id__in=org_ids)
+            .select_related("project_object")
+            .order_by("evaluation_status", "project_object__name", "property_name")
+        )
+
+
+urlpatterns = [
+    path("", FormulaListView.as_view(), name="formula-list"),
+    path("calculations/", FormulaCalculationListView.as_view(), name="formula-calculations"),
+]

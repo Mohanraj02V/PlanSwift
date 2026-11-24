@@ -4,14 +4,20 @@ import React from "react";
 import type { ProvenanceStatus } from "@/types/api";
 
 const STATUS_STYLES: Record<ProvenanceStatus, { bg: string; label: string }> = {
-  original: { bg: "bg-emerald-100 text-emerald-800 border-emerald-300", label: "original" },
-  api_extracted: { bg: "bg-sky-100 text-sky-800 border-sky-300", label: "api_extracted" },
-  normalized: { bg: "bg-indigo-100 text-indigo-800 border-indigo-300", label: "normalized" },
-  computed_by_planswift: { bg: "bg-teal-100 text-teal-800 border-teal-300", label: "computed_by_planswift" },
-  derived: { bg: "bg-amber-100 text-amber-800 border-amber-300", label: "derived" },
-  ai_inferred: { bg: "bg-purple-100 text-purple-800 border-purple-300", label: "ai_inferred" },
+  native: { bg: "bg-emerald-100 text-emerald-800 border-emerald-300", label: "native" },
+  calculated: { bg: "bg-teal-100 text-teal-800 border-teal-300", label: "calculated" },
+  reconstructed: { bg: "bg-sky-100 text-sky-800 border-sky-300", label: "reconstructed" },
+  inferred: { bg: "bg-indigo-100 text-indigo-800 border-indigo-300", label: "inferred" },
+  ai_generated: { bg: "bg-purple-100 text-purple-800 border-purple-300", label: "ai_generated" },
   unresolved: { bg: "bg-orange-100 text-orange-800 border-orange-300", label: "unresolved" },
   unsupported: { bg: "bg-rose-100 text-rose-800 border-rose-300", label: "unsupported" },
+  // Legacy aliases preserved for previously stored rows
+  original: { bg: "bg-emerald-100 text-emerald-800 border-emerald-300", label: "native" },
+  api_extracted: { bg: "bg-sky-100 text-sky-800 border-sky-300", label: "reconstructed" },
+  normalized: { bg: "bg-indigo-100 text-indigo-800 border-indigo-300", label: "reconstructed" },
+  computed_by_planswift: { bg: "bg-teal-100 text-teal-800 border-teal-300", label: "calculated" },
+  derived: { bg: "bg-amber-100 text-amber-800 border-amber-300", label: "reconstructed" },
+  ai_inferred: { bg: "bg-purple-100 text-purple-800 border-purple-300", label: "ai_generated" },
 };
 
 export function ProvenanceBadge({ status }: { status: ProvenanceStatus | string }) {

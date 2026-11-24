@@ -52,8 +52,8 @@ export default function MeasurementsPage() {
               <th className="px-3 py-2">Type</th>
               <th className="px-3 py-2">Property</th>
               <th className="px-3 py-2">Raw Formula</th>
-              <th className="px-3 py-2">Derived Qty</th>
-              <th className="px-3 py-2">PlanSwift Computed</th>
+              <th className="px-3 py-2">Reconstructed (Geom)</th>
+              <th className="px-3 py-2">Calculated (Formula)</th>
               <th className="px-3 py-2">Unit</th>
               <th className="px-3 py-2">Status</th>
             </tr>
@@ -68,9 +68,9 @@ export default function MeasurementsPage() {
                 <td className="px-3 py-2 font-mono">{m.measurement_type}</td>
                 <td className="px-3 py-2">{m.property_name}</td>
                 <td className="px-3 py-2 font-mono text-slate-700">{m.raw_formula || m.native_stored_value || "—"}</td>
-                <td className="px-3 py-2 font-mono font-semibold">{m.derived_quantity ?? "—"}</td>
-                <td className="px-3 py-2 font-mono">{m.planswift_computed_quantity ?? "—"}</td>
-                <td className="px-3 py-2">{m.normalized_unit || m.unit || "—"}</td>
+                <td className="px-3 py-2 font-mono">{m.reconstructed_quantity ?? "—"}</td>
+                <td className="px-3 py-2 font-mono font-semibold text-teal-800">{m.calculated_quantity ?? m.derived_quantity ?? "—"}</td>
+                <td className="px-3 py-2">{m.unit || m.normalized_unit || "—"}</td>
                 <td className="px-3 py-2">
                   <ProvenanceBadge status={m.status} />
                 </td>

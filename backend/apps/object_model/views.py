@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from django.db.models import Count
 from rest_framework import serializers, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from apps.object_model.models import ObjectProperty, ProjectObject
 from apps.permissions.rbac import IsOrgMember, get_user_org_ids
@@ -40,7 +43,7 @@ class ObjectPropertySerializer(serializers.ModelSerializer):
 
 
 class ProjectObjectListSerializer(serializers.ModelSerializer):
-    property_count = serializers.IntegerField(source="properties.count", read_only=True)
+    property_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = ProjectObject
@@ -71,12 +74,31 @@ class ProjectObjectDetailSerializer(ProjectObjectListSerializer):
     properties = ObjectPropertySerializer(many=True, read_only=True)
 
     class Meta(ProjectObjectListSerializer.Meta):
-        fields = [*ProjectObjectListSerializer.Meta.fields, "subdivision", "phase", "location", "zone", "created_by_raw", "timestamp_raw", "raw_attributes", "properties"]
+        fields = [
+            *ProjectObjectListSerializer.Meta.fields,
+            "subdivision",
+            "phase",
+            "location",
+            "zone",
+            "created_by_raw",
+            "timestamp_raw",
+            "raw_attributes",
+            "properties",
+        ]
 
 
 class ProjectObjectViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsOrgMember]
-    filterset_fields = ["project_version", "project_version__project", "native_class", "is_known_class", "is_measurement_section", "is_page", "parent_guid", "page_guid"]
+    filterset_fields = [
+        "project_version",
+        "project_version__project",
+        "native_class",
+        "is_known_class",
+        "is_measurement_section",
+        "is_page",
+        "parent_guid",
+        "page_guid",
+    ]
     search_fields = ["name", "native_guid", "native_class", "root_path"]
     ordering_fields = ["depth", "order_index", "name", "native_class"]
 
@@ -87,9 +109,22 @@ class ProjectObjectViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         org_ids = get_user_org_ids(self.request.user)
-        qs = ProjectObject.objects.filter(project_version__project__organization_id__in=org_ids).select_related(
-            "project_version", "project_version__project", "project_version__project__organization"
+        qs = (
+            ProjectObject.objects.filter(project_version__project__organization_id__in=org_ids)
+            .select_related("project_version", "project_version__project", "project_version__project__organization")
+            .annotate(property_count=Count("properties"))
         )
         if self.action == "retrieve":
             qs = qs.prefetch_related("properties")
         return qs
+
+    @action(detail=False, methods=["get"], url_path="unsupported")
+    def unsupported(self, request):
+        """Return unknown/unsupported native PlanSwift objects preserved raw."""
+        qs = self.filter_queryset(self.get_queryset().filter(is_known_class=False)).prefetch_related("properties")
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            ser = ProjectObjectDetailSerializer(page, many=True)
+            return self.get_paginated_response(ser.data)
+        ser = ProjectObjectDetailSerializer(qs, many=True)
+        return Response(ser.data)

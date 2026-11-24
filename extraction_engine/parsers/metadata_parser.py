@@ -1,4 +1,4 @@
-"""Metadata, Page-to-TIFF matching, SwiftExcel memo parsing, and specialized entity extractors."""
+"""Metadata, Page-to-TIFF matching, scale extraction, SwiftExcel memo parsing, and specialized entity extractors."""
 
 from __future__ import annotations
 
@@ -22,10 +22,24 @@ def parse_swift_excel_memo(raw_memo: str) -> dict[str, str]:
     return parsed
 
 
+def _parse_positive_float(prop) -> float | None:
+    if prop is None or not prop.raw_value.strip():
+        return None
+    try:
+        val = float(prop.raw_value.strip())
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
+
 def enrich_project_and_pages(project: CanonicalProject, manifest: SourceManifest | None) -> None:
     """Populate project-level metadata, build CanonicalPage records, and link TIFF entries by Image GUID."""
     tiff_by_guid: dict[str, tuple[str, int]] = {}
     if manifest is not None:
+        if manifest.detected_xml_encoding:
+            project.xml_encoding = manifest.detected_xml_encoding
+        if manifest.detected_project_version:
+            project.native_project_version = manifest.detected_project_version
         for entry in manifest.entries:
             if entry.is_raster_asset and entry.asset_guid:
                 tiff_by_guid[entry.asset_guid.upper()] = (entry.relative_path, entry.uncompressed_size)
@@ -37,9 +51,12 @@ def enrich_project_and_pages(project: CanonicalProject, manifest: SourceManifest
         m_type = root_obj.get_property("Measurement Type")
         excel = root_obj.get_property("ExcelWorkbookConnected")
         job_id = root_obj.get_property("JobId")
+        ver_prop = root_obj.get_property("PlanSwift Version") or root_obj.get_property("Version")
         project.description = desc.raw_value if desc else ""
         project.notes = notes.raw_value if notes else ""
         project.measurement_system = m_type.raw_value if m_type else ""
+        if ver_prop and ver_prop.raw_value.strip():
+            project.native_project_version = ver_prop.raw_value.strip()
         if excel is not None and excel.raw_value.strip():
             low = excel.raw_value.strip().lower()
             project.excel_workbook_connected = True if low in ("true", "-1", "1") else (False if low in ("false", "0") else None)
@@ -49,6 +66,7 @@ def enrich_project_and_pages(project: CanonicalProject, manifest: SourceManifest
 
     pages_by_guid: dict[str, CanonicalPage] = {}
     pages: list[CanonicalPage] = []
+    missing_refs: list[str] = []
 
     for obj in project.objects:
         if obj.is_page:
@@ -60,17 +78,13 @@ def enrich_project_and_pages(project: CanonicalProject, manifest: SourceManifest
                 for entry in manifest.entries:
                     if entry.asset_guid and entry.asset_guid.upper() == img_guid:
                         entry.linked_page_guid = obj.native_guid
+            elif manifest is not None and img_guid and tiff_info is None:
+                missing_refs.append(f"Page '{obj.name}' ({obj.native_guid}) missing raster image GUID {img_guid}")
 
             scale_units = obj.get_property("Scale Units")
-            scale_x = obj.get_property("ScaleX")
-            numeric_scale_factor: float | None = None
-            if scale_x is not None and scale_x.raw_value.strip():
-                try:
-                    parsed_scale = float(scale_x.raw_value.strip())
-                    if parsed_scale > 0:
-                        numeric_scale_factor = parsed_scale
-                except ValueError:
-                    numeric_scale_factor = None
+            scale_x = _parse_positive_float(obj.get_property("ScaleX"))
+            scale_y = _parse_positive_float(obj.get_property("ScaleY")) or scale_x
+            numeric_scale_factor = scale_x
 
             pw = obj.get_property("PageWidth")
             ph = obj.get_property("PageHeight")
@@ -85,21 +99,24 @@ def enrich_project_and_pages(project: CanonicalProject, manifest: SourceManifest
                 tiff_archive_path=tiff_info[0] if tiff_info else None,
                 tiff_size_bytes=tiff_info[1] if tiff_info else None,
                 scale_units=scale_units.raw_value if scale_units else None,
+                scale_x=scale_x,
+                scale_y=scale_y,
                 numeric_scale_factor=numeric_scale_factor,
                 page_width_raw=pw.raw_value if pw else None,
                 page_height_raw=ph.raw_value if ph else None,
                 created_by=obj.created_by,
                 timestamp_raw=obj.timestamp_raw,
                 pages_window_expanded=bool(pwe.parsed_value) if pwe and isinstance(pwe.parsed_value, bool) else None,
-                provenance=ProvenanceStatus.ORIGINAL,
+                provenance=ProvenanceStatus.NATIVE,
             )
             pages.append(page)
             pages_by_guid[obj.native_guid.upper()] = page
 
-        # Extract denotations (Item #, GroupId, Cost Code, SwiftExcel Memo tokens) & remarks
         _extract_denotations_and_remarks(obj)
 
-    # Count sections per page
+    if manifest is not None and missing_refs:
+        manifest.missing_referenced_files = missing_refs
+
     for obj in project.objects:
         if obj.is_measurement_section and obj.page_guid:
             pg = pages_by_guid.get(obj.page_guid.upper())
@@ -119,7 +136,7 @@ def _extract_denotations_and_remarks(obj) -> None:
                     kind="item_number",
                     label="Item #",
                     value=prop.raw_value.strip(),
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
         elif prop.name == "GroupId" and prop.raw_value.strip():
@@ -130,7 +147,7 @@ def _extract_denotations_and_remarks(obj) -> None:
                     kind="group_id",
                     label="GroupId",
                     value=prop.raw_value.strip(),
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
         elif prop.name == "Cost Code" and prop.raw_value.strip():
@@ -141,7 +158,7 @@ def _extract_denotations_and_remarks(obj) -> None:
                     kind="cost_code",
                     label="Cost Code",
                     value=prop.raw_value.strip(),
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
         elif prop.group == "Swift Excel" and prop.property_class == "Memo" and "TokenGuid=" in prop.raw_value:
@@ -154,7 +171,7 @@ def _extract_denotations_and_remarks(obj) -> None:
                     label=prop.name or prop.native_property_guid,
                     value=meta.get("TokenGuid", prop.name),
                     metadata=meta,
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
         elif prop.name in ("Description", "Notes", "Remarks") and prop.raw_value.strip():
@@ -164,6 +181,6 @@ def _extract_denotations_and_remarks(obj) -> None:
                     object_guid=obj.native_guid,
                     field_name=prop.name,
                     text=prop.raw_value.strip(),
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )

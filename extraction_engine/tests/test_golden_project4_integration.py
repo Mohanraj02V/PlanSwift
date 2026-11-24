@@ -1,4 +1,4 @@
-"""Golden dataset integration test running on real project 4.SwiftJob.zip."""
+"""Golden dataset integration test running on real project 4.SwiftJob.zip cleanly without PlanSwift."""
 
 from __future__ import annotations
 
@@ -62,21 +62,30 @@ def test_golden_project_4_extraction_accuracy_idempotency_and_exports(tmp_path: 
     assert len(all_geoms) == 1052
     assert sum(g.point_count for g in all_geoms) == 4868
 
-    # 6. Spot-check real takeoff items
+    # 6. Spot-check real takeoff items (both reconstructed and standalone formula-calculated!)
     by_name = {o.name: o for o in project.objects if o.native_class in ("Count", "Segment")}
-    assert by_name["CHR ans CHS 100"].get_property("Qty").raw_value == "[Takeoff]"
-    assert next(m for m in by_name["CHR ans CHS 100"].measurements if m.property_name == "Qty").derived_quantity == 21.0
-    assert next(m for m in by_name["CHS and CHR20 mm dia"].measurements if m.property_name == "Qty").derived_quantity == 922.0
-    assert next(m for m in by_name["Duct 350x200mm"].measurements if m.property_name == "Qty").derived_quantity == 286.0
-    assert next(m for m in by_name["ELECTRICALPVC 25mm"].measurements if m.property_name == "Qty").derived_quantity == 354.0
+    for name, expected in [
+        ("CHR ans CHS 100", 21.0),
+        ("CHS and CHR20 mm dia", 922.0),
+        ("Duct 350x200mm", 286.0),
+        ("ELECTRICALPVC 25mm", 354.0),
+    ]:
+        meas = next(m for m in by_name[name].measurements if m.property_name == "Qty")
+        assert meas.reconstructed_quantity == expected
+        assert meas.calculated_quantity == expected
+        assert meas.status == ProvenanceStatus.CALCULATED
     assert by_name["New Segment"].native_class == "Segment"
 
-    # 7. PascalScript & formula preservation (no eval)
+    # 7. Formula engine evaluation + explicit unresolved attribution (PageWidth, \Settings\, etc.)
     pascal_formulas = [f for o in project.objects for f in o.formulas if f.is_pascal_script]
     assert len(pascal_formulas) == 78
-    assert all(f.evaluation_status == ProvenanceStatus.UNRESOLVED for f in pascal_formulas)
+    # The 78 standard decimal-separator probes ('sep') safely evaluate to '.' without executing PascalScript
+    assert all(f.evaluation_status == ProvenanceStatus.CALCULATED and f.calculated_value == "." for f in pascal_formulas)
+    pw_formulas = [f for o in project.objects for f in o.formulas if f.property_name == "PageWidth"]
+    assert len(pw_formulas) == 180
+    assert all(f.evaluation_status == ProvenanceStatus.UNRESOLVED and f.calculation_reason == "system_variable_unavailable" for f in pw_formulas)
 
-    # 8. Performance & memory sanity (must stay well below 256 MB RAM while reading 556 MB archive)
+    # 8. Performance & memory sanity
     assert report.status == "COMPLETED"
     assert report.peak_memory_mb < 256.0
     assert report.validation.objects_extracted == 1461
@@ -88,13 +97,17 @@ def test_golden_project_4_extraction_accuracy_idempotency_and_exports(tmp_path: 
     assert project2.deterministic_digest_sha256 == project.deterministic_digest_sha256
     assert report2.validation.objects_extracted == 1461
 
-    # 10. All exports succeed cleanly
+    # 10. All exports succeed cleanly and conform to versioned schema
     p_json = export_project_json(project, tmp_path / "out.json", report=report)
     p_jsonl = export_objects_jsonl(project, tmp_path / "out.jsonl", run_id=report.run_id)
     p_geo = export_geometry_geojson(project, tmp_path / "out.geojson")
     p_csv = export_takeoff_csv(project, tmp_path / "out.csv")
     p_xlsx = export_project_excel(project, tmp_path / "out.xlsx")
     assert p_json.exists() and p_jsonl.exists() and p_geo.exists() and p_csv.exists() and p_xlsx.exists()
+    json_payload = json.loads(p_json.read_text(encoding="utf-8"))
+    assert json_payload["schema_version"] == "1.0"
+    assert len(json_payload["calculations"]) == 9013
+    assert json_payload["extraction"]["source_filename"] == "project 4.SwiftJob.zip"
     geo_data = json.loads(p_geo.read_text(encoding="utf-8"))
     non_empty_geom_count = sum(1 for g in all_geoms if g.point_count > 0)
     assert len(geo_data["features"]) == non_empty_geom_count

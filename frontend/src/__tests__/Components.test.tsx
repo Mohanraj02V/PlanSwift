@@ -7,14 +7,13 @@ import { ObjectInspector } from "@/components/object-inspector/ObjectInspector";
 import type { GeometryFeature, ProjectObject } from "@/types/api";
 
 describe("Core Provenance & Native Inspection Components", () => {
-  it("renders every provenance status accurately", () => {
+  it("renders every standalone provenance status accurately", () => {
     const statuses = [
-      "original",
-      "api_extracted",
-      "normalized",
-      "computed_by_planswift",
-      "derived",
-      "ai_inferred",
+      "native",
+      "calculated",
+      "reconstructed",
+      "inferred",
+      "ai_generated",
       "unresolved",
       "unsupported",
     ] as const;
@@ -30,23 +29,31 @@ describe("Core Provenance & Native Inspection Components", () => {
     }
   });
 
-  it("renders GeometryDataViewer as structured coordinates without drawing canvas or raster image", () => {
+  it("renders GeometryDataViewer as structured coordinates with calibration without drawing canvas or raster image", () => {
     const feature: GeometryFeature = {
       id: "geom-1",
       section_guid: "{CB477009-2C9F-49F1-8ADD-42B02D38F149}",
       parent_object_guid: "{1CB26172-81E8-4EA8-A144-805C05A379B7}",
       page_guid: "{A496DDA7-D1E4-4BF2-8A4F-A2B35507BE3E}",
-      geometry_type: "PointCollection",
-      coordinate_system: "planswift_page_digitizer_raw",
-      point_count: 2,
-      bbox_min_x: 3224.656,
-      bbox_min_y: 755.45,
-      bbox_max_x: 3234.371,
-      bbox_max_y: 768.663,
-      derived_polyline_length: null,
-      derived_polygon_area: null,
-      provenance: "original",
-      derived_metrics_provenance: "derived",
+      geometry_type: "Polygon",
+      coordinate_system: "planswift_page_calibrated",
+      point_count: 4,
+      bbox_min_x: 0,
+      bbox_min_y: 0,
+      bbox_max_x: 375,
+      bbox_max_y: 375,
+      derived_polyline_length: 1500,
+      derived_polygon_area: 140625,
+      scale_x: 37.5,
+      scale_y: 37.5,
+      scale_unit: "FT",
+      is_calibrated: true,
+      calibrated_length: 40.0,
+      calibrated_area: 100.0,
+      calibrated_unit: "SQ FT",
+      normalized_area_m2: 9.2903,
+      provenance: "native",
+      derived_metrics_provenance: "reconstructed",
       points: [
         {
           point_order: 0,
@@ -55,20 +62,21 @@ describe("Core Provenance & Native Inspection Components", () => {
           point_type: "Normal",
           raw_x: "3234.37109375",
           raw_y: "755.450866699219",
-          normalized_x: null,
-          normalized_y: null,
-          provenance: "original",
+          normalized_x: 86.249896,
+          normalized_y: 20.145356,
+          provenance: "native",
         },
       ],
     };
 
     const { container } = render(<GeometryDataViewer feature={feature} />);
     expect(screen.getByText("3234.37109375")).toBeInTheDocument();
+    expect(screen.getByText("100.00 SQ FT")).toBeInTheDocument();
     expect(container.querySelector("canvas")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("renders ObjectInspector preserving empty-name properties and formulas", () => {
+  it("renders ObjectInspector preserving empty-name properties and calculation sections", () => {
     const obj: ProjectObject = {
       id: "obj-1",
       project_version: "ver-1",
@@ -87,7 +95,7 @@ describe("Core Provenance & Native Inspection Components", () => {
       group_id: null,
       division: "",
       cost_code: "",
-      provenance: "original",
+      provenance: "native",
       property_count: 1,
       properties: [
         {
@@ -115,7 +123,7 @@ describe("Core Provenance & Native Inspection Components", () => {
           image_data_sha256: "",
           attributes_json: {},
           source_location: "XMLData.XML",
-          provenance: "original",
+          provenance: "native",
           normalization_provenance: "",
         },
       ],
@@ -124,5 +132,6 @@ describe("Core Provenance & Native Inspection Components", () => {
     render(<ObjectInspector object={obj} />);
     expect(screen.getByText("Duct 250x150mm")).toBeInTheDocument();
     expect(screen.getByText("(empty Name attribute)")).toBeInTheDocument();
+    expect(screen.getByText("Independent Calculation Audit")).toBeInTheDocument();
   });
 });

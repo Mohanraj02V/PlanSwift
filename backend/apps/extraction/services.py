@@ -1,4 +1,4 @@
-"""Extraction orchestration & idempotent canonical ORM persistence service."""
+"""Extraction orchestration & idempotent standalone canonical ORM persistence service."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from apps.classifications.models import ObjectClassification
 from apps.components.models import AssemblyComponent
 from apps.denotations.models import Denotation
 from apps.extraction.models import ExtractionError, ExtractionEvent, ExtractionRun
-from apps.formulas.models import Formula, FormulaDependency
+from apps.formulas.models import CalculatedValue, Formula, FormulaDependency
 from apps.geometry.models import GeometryFeature, MeasurementPoint
 from apps.measurements.models import Measurement, MeasurementSection
 from apps.notifications.models import Notification
@@ -28,7 +28,6 @@ from apps.object_model.models import (
     PropertyDefinition,
     ProvenanceRecord,
 )
-from apps.planswift_connector.models import ConnectorSyncBatch
 from apps.project_sources.models import ProjectSource
 from apps.projects.models import ProjectPage, ProjectVersion
 from apps.reconciliation.models import ReconciliationReport
@@ -41,7 +40,26 @@ from extraction_engine.pipeline import ExtractionPipeline
 
 
 class ExtractionOrchestrationService:
-    """Runs ExtractionPipeline on a registered ProjectSource and persists canonical records idempotently."""
+    """Runs standalone ExtractionPipeline on a registered/uploaded ProjectSource and persists canonical records."""
+
+    @staticmethod
+    def _build_engine_config() -> ExtractionConfig:
+        allowed_roots = tuple(Path(r) for r in settings.ALLOWED_SOURCE_ROOTS) + (
+            Path(settings.EXTRACTION_WORK_DIR).resolve(),
+        )
+        checkpoint_dir = Path(settings.EXTRACTION_WORK_DIR) / "checkpoints"
+        return ExtractionConfig(
+            allowed_source_roots=allowed_roots,
+            work_dir=Path(settings.EXTRACTION_WORK_DIR),
+            checkpoint_dir=checkpoint_dir,
+            max_upload_bytes=int(getattr(settings, "MAX_UPLOAD_ZIP_BYTES", 1024 * 1024 * 1024)),
+            max_archive_entries=int(getattr(settings, "EXTRACTION_MAX_ARCHIVE_ENTRIES", 10_000)),
+            max_uncompressed_bytes=int(getattr(settings, "EXTRACTION_MAX_UNCOMPRESSED_BYTES", 5 * 1024 * 1024 * 1024)),
+            max_compression_ratio=float(getattr(settings, "EXTRACTION_MAX_COMPRESSION_RATIO", 100.0)),
+            max_xml_depth=int(getattr(settings, "EXTRACTION_MAX_XML_DEPTH", 64)),
+            max_xml_nodes=int(getattr(settings, "EXTRACTION_MAX_XML_NODES", 2_000_000)),
+            max_parse_seconds=float(getattr(settings, "EXTRACTION_MAX_PARSE_SECONDS", 300.0)),
+        )
 
     @staticmethod
     def execute_run(run_id: str) -> ExtractionRun:
@@ -58,14 +76,12 @@ class ExtractionOrchestrationService:
             return run
 
         run.started_at = timezone.now()
-        run.status = ExtractionRun.Status.INSPECTING_SOURCE
+        run.status = ExtractionRun.Status.VALIDATING_ARCHIVE
         run.progress_pct = 5
         run.save(update_fields=["started_at", "status", "progress_pct"])
 
         cancel_evt = threading.Event()
-        allowed_roots = tuple(Path(r) for r in settings.ALLOWED_SOURCE_ROOTS)
-        checkpoint_dir = Path(settings.EXTRACTION_WORK_DIR) / "checkpoints"
-        cfg = ExtractionConfig(allowed_source_roots=allowed_roots, checkpoint_dir=checkpoint_dir)
+        cfg = ExtractionOrchestrationService._build_engine_config()
 
         def on_progress(stage: ExtractionStage, pct: int, message: str) -> None:
             run.refresh_from_db(fields=["cancel_requested"])
@@ -87,13 +103,9 @@ class ExtractionOrchestrationService:
             progress_callback=on_progress,
         )
 
-        # Include latest optional COM sync snapshot if previously uploaded for this project
-        com_batch = ConnectorSyncBatch.objects.filter(project=project).order_by("-received_at").first()
-        com_payload = com_batch.raw_payload if com_batch else None
-
         pipeline = ExtractionPipeline(config=cfg)
         try:
-            canonical_project, report = pipeline.run(Path(source.source_path), com_payload=com_payload, ctx=ctx)
+            canonical_project, report = pipeline.run(Path(source.source_path), ctx=ctx)
         except Exception as exc:
             is_cancel = cancel_evt.is_set()
             run.status = ExtractionRun.Status.CANCELLED if is_cancel else ExtractionRun.Status.FAILED
@@ -108,6 +120,14 @@ class ExtractionOrchestrationService:
                 recoverable=is_cancel,
             )
             return run
+
+        ExtractionRun.objects.filter(id=run.id).update(status=ExtractionStage.PERSISTING.value, progress_pct=98)
+        ExtractionEvent.objects.create(
+            extraction_run=run,
+            stage=ExtractionStage.PERSISTING.value,
+            progress_pct=98,
+            message=f"Persisting {len(canonical_project.objects)} canonical objects to database.",
+        )
 
         version = ExtractionOrchestrationService._persist_canonical_project(
             run=run,
@@ -131,6 +151,8 @@ class ExtractionOrchestrationService:
             "pages_extracted": len(canonical_project.pages),
             "relationships_extracted": len(canonical_project.relationships),
             "discovered_classes": canonical_project.discovered_classes,
+            "unsupported_objects_count": len(canonical_project.unsupported_objects),
+            "formulas_calculated": report.validation.formulas_calculated if report.validation else 0,
             "validation_accuracy_pct": report.validation.overall_verified_accuracy_pct if report.validation else None,
         }
         run.save()
@@ -171,14 +193,14 @@ class ExtractionOrchestrationService:
         project.description = canonical_project.description
         project.notes = canonical_project.notes
         project.project_type = canonical_project.project_type
+        project.native_project_version = canonical_project.native_project_version or ""
         project.measurement_system = canonical_project.measurement_system
         project.excel_workbook_connected = canonical_project.excel_workbook_connected
         project.xml_encoding = canonical_project.xml_encoding
         project.native_timestamp_raw = canonical_project.timestamp_raw
         project.save()
 
-        # Idempotency check: if a ProjectVersion with the exact same source_sha256 + deterministic digest
-        # already has persisted canonical objects, reuse it cleanly without creating duplicate rows!
+        # Idempotency check: reuse existing version with same source+digest+engine_version
         existing_version = (
             ProjectVersion.objects.filter(
                 project=project,
@@ -188,44 +210,36 @@ class ExtractionOrchestrationService:
             .order_by("-version_number")
             .first()
         )
-        if existing_version is not None and existing_version.project_objects.count() == len(canonical_project.objects):
+        if (
+            existing_version is not None
+            and existing_version.project_objects.count() == len(canonical_project.objects)
+            and existing_version.metadata.get("engine_version") == canonical_project.engine_version
+        ):
             ProjectVersion.objects.filter(project=project).exclude(id=existing_version.id).update(is_current=False)
             if not existing_version.is_current:
                 existing_version.is_current = True
                 existing_version.save(update_fields=["is_current"])
-            if report.reconciliation_summary and report.reconciliation_summary.get("com_available"):
-                for co in canonical_project.objects:
-                    for m in co.measurements:
-                        if m.planswift_computed_quantity is not None:
-                            Measurement.objects.filter(
-                                project_version=existing_version,
-                                measurement_key=m.measurement_key,
-                            ).update(
-                                planswift_computed_quantity=m.planswift_computed_quantity,
-                                status=m.status.value,
-                            )
-                    for f in co.formulas:
-                        if f.planswift_evaluated_value:
-                            Formula.objects.filter(
-                                project_version=existing_version,
-                                formula_key=f.formula_key,
-                            ).update(
-                                planswift_evaluated_value=f.planswift_evaluated_value,
-                                evaluation_status=f.evaluation_status.value,
-                            )
             ExtractionOrchestrationService._persist_validation_and_reconciliation(
                 version=existing_version, run=run, report=report
             )
             return existing_version
 
-        # Otherwise create or populate version cleanly
         last_ver = ProjectVersion.objects.filter(project=project).order_by("-version_number").first()
-        if last_ver and last_ver.project_objects.count() == 0 and (not last_ver.source_sha256 or last_ver.source_sha256 == source.source_sha256):
+        if (
+            last_ver
+            and last_ver.project_objects.count() == 0
+            and (not last_ver.source_sha256 or last_ver.source_sha256 == source.source_sha256)
+        ):
             version = last_ver
             version.source_sha256 = source.source_sha256
             version.deterministic_digest_sha256 = digest
             version.is_current = True
-            version.save(update_fields=["source_sha256", "deterministic_digest_sha256", "is_current"])
+            version.metadata = {
+                "discovered_classes": canonical_project.discovered_classes,
+                "unsupported_classes": canonical_project.unsupported_classes,
+                "engine_version": canonical_project.engine_version,
+            }
+            version.save(update_fields=["source_sha256", "deterministic_digest_sha256", "is_current", "metadata"])
         else:
             ProjectVersion.objects.filter(project=project).update(is_current=False)
             next_num = (last_ver.version_number + 1) if last_ver else 1
@@ -235,10 +249,13 @@ class ExtractionOrchestrationService:
                 source_sha256=source.source_sha256,
                 deterministic_digest_sha256=digest,
                 is_current=True,
-                metadata={"discovered_classes": canonical_project.discovered_classes},
+                metadata={
+                    "discovered_classes": canonical_project.discovered_classes,
+                    "unsupported_classes": canonical_project.unsupported_classes,
+                    "engine_version": canonical_project.engine_version,
+                },
             )
 
-        # Link SourceFile raster assets to Page GUIDs
         if canonical_project.source_manifest is not None:
             for entry in canonical_project.source_manifest.entries:
                 if entry.linked_page_guid:
@@ -259,6 +276,8 @@ class ExtractionOrchestrationService:
                 tiff_archive_path=pg.tiff_archive_path or "",
                 tiff_size_bytes=pg.tiff_size_bytes,
                 scale_units=pg.scale_units or "",
+                scale_x=pg.scale_x,
+                scale_y=pg.scale_y,
                 page_width_raw=pg.page_width_raw or "",
                 page_height_raw=pg.page_height_raw or "",
                 numeric_scale_factor=pg.numeric_scale_factor,
@@ -340,7 +359,7 @@ class ExtractionOrchestrationService:
         ProjectObject.objects.bulk_create(obj_models, batch_size=500)
         obj_by_guid = {o.native_guid.upper(): o for o in ProjectObject.objects.filter(project_version=version)}
 
-        # 4. ObjectProperties (batch 28,355+ properties quickly)
+        # 4. ObjectProperties, Denotations, Remarks, Classifications, Groups
         prop_models: list[ObjectProperty] = []
         denotation_models: list[Denotation] = []
         remark_models: list[Remark] = []
@@ -361,7 +380,7 @@ class ExtractionOrchestrationService:
                         division=co.division or "",
                         subdivision=co.subdivision or "",
                         cost_code=co.cost_code or "",
-                        provenance="original",
+                        provenance="native",
                     )
                 )
             for p in co.properties:
@@ -477,13 +496,16 @@ class ExtractionOrchestrationService:
                         property_name=m.property_name,
                         raw_formula=m.raw_formula or "",
                         native_stored_value=m.native_stored_value or "",
-                        planswift_computed_quantity=m.planswift_computed_quantity,
+                        planswift_computed_quantity=m.calculated_quantity,
+                        calculated_quantity=m.calculated_quantity,
+                        reconstructed_quantity=m.reconstructed_quantity,
                         derived_quantity=m.derived_quantity,
                         unit=m.unit or "",
                         normalized_quantity=m.normalized_quantity,
                         normalized_unit=m.normalized_unit or "",
                         precision=m.precision or "",
                         is_default_template_value=m.is_default_template_value,
+                        calculation_inputs_json=m.calculation_inputs,
                         status=m.status.value,
                         notes=m.notes or "",
                     )
@@ -513,6 +535,15 @@ class ExtractionOrchestrationService:
                         bbox_max_y=g.bbox_max_y,
                         derived_polyline_length=g.derived_polyline_length,
                         derived_polygon_area=g.derived_polygon_area,
+                        scale_x=g.scale_x,
+                        scale_y=g.scale_y,
+                        scale_unit=g.scale_unit,
+                        is_calibrated=g.is_calibrated,
+                        calibrated_length=g.calibrated_length,
+                        calibrated_area=g.calibrated_area,
+                        calibrated_unit=g.calibrated_unit,
+                        normalized_length_m=g.normalized_length_m,
+                        normalized_area_m2=g.normalized_area_m2,
                         raw_digitizer_xml=g.raw_digitizer_xml,
                         provenance=g.provenance.value,
                         derived_metrics_provenance=g.derived_metrics_provenance.value,
@@ -542,9 +573,10 @@ class ExtractionOrchestrationService:
                 )
         MeasurementPoint.objects.bulk_create(point_models, batch_size=1000)
 
-        # 8. Formulas & Dependencies
+        # 8. Formulas, Dependencies, & CalculatedValues
         form_models = []
         deps_by_fkey: dict[str, list[Any]] = {}
+        calc_by_fkey: dict[str, Any] = {}
         for co in canonical_project.objects:
             db_obj = obj_by_guid[co.native_guid.upper()]
             for f in co.formulas:
@@ -563,10 +595,17 @@ class ExtractionOrchestrationService:
                         circular_path=f.circular_path,
                         unresolved_references=f.unresolved_references,
                         evaluation_status=f.evaluation_status.value,
-                        planswift_evaluated_value=f.planswift_evaluated_value or "",
+                        planswift_evaluated_value=f.calculated_value or "",
+                        calculated_value=f.calculated_value or "",
+                        calculated_numeric=f.calculated_numeric,
+                        calculation_unit=f.calculation_unit or "",
+                        calculation_reason=f.calculation_reason or "",
+                        calculation_inputs_json=f.calculation_inputs,
                     )
                 )
                 deps_by_fkey[f.formula_key] = f.dependencies
+                if f.calculated_value is not None:
+                    calc_by_fkey[f.formula_key] = f
         Formula.objects.bulk_create(form_models, batch_size=1000)
         form_by_key = {f.formula_key: f for f in Formula.objects.filter(project_version=version)}
 
@@ -585,6 +624,17 @@ class ExtractionOrchestrationService:
                     )
                 )
         FormulaDependency.objects.bulk_create(dep_models, batch_size=1000)
+
+        calc_models = [
+            CalculatedValue(
+                formula=form_by_key[fkey],
+                value_text=f.calculated_value or "",
+                numeric_value=f.calculated_numeric,
+                source_status=f.evaluation_status.value,
+            )
+            for fkey, f in calc_by_fkey.items()
+        ]
+        CalculatedValue.objects.bulk_create(calc_models, batch_size=1000)
 
         # 9. Relationships, Assemblies, and ProvenanceRecords
         ObjectRelationship.objects.bulk_create(
@@ -689,11 +739,11 @@ class ExtractionOrchestrationService:
             ReconciliationReport.objects.create(
                 project_version=version,
                 extraction_run=run,
-                mode=rec.get("mode", "package_only"),
-                com_available=bool(rec.get("com_available", False)),
+                mode=rec.get("mode", "standalone_zip_verified"),
+                com_available=False,
                 matched_objects=int(rec.get("matched_objects", 0)),
                 package_only_objects=int(rec.get("package_only_objects", 0)),
-                com_only_objects=int(rec.get("com_only_objects", 0)),
+                com_only_objects=0,
                 computed_values_applied=int(rec.get("computed_values_applied", 0)),
                 duplicate_guid_count=int(rec.get("duplicate_detection", {}).get("duplicate_guid_count", 0)),
                 summary_json=rec,

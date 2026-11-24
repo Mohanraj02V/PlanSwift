@@ -1,7 +1,8 @@
-"""Streaming memory-efficient XMLData.XML parser with XXE/DTD protection."""
+"""Streaming memory-efficient XMLData.XML parser with XXE/DTD, depth, node-count, and time protection."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
@@ -44,18 +45,30 @@ def parse_xmldata_stream(
     ctx: ExtractionContext,
     registry: ExtractionRegistry | None = None,
 ) -> CanonicalProject:
-    """Stream-parse XMLData.XML using lxml.etree.iterparse without DTD/entity expansion."""
+    """Stream-parse XMLData.XML using lxml.etree.iterparse with DTD/entity, depth, node, and timeout limits."""
     reg = registry or ExtractionRegistry()
     objects: list[CanonicalObject] = []
     discovered_classes: dict[str, int] = {}
     unsupported_classes: dict[str, int] = {}
+    unsupported_objects: list[dict[str, object]] = []
     provenance_records: list[ProvenanceRecord] = []
 
     stack: list[_ItemFrame] = []
     item_ordinal = 0
     in_properties = False
+    xml_depth = 0
+    node_count = 0
+    t_start = time.monotonic()
 
-    # iterparse supports streaming huge XML trees while rejecting DTD/entities/network access
+    # Reject DOCTYPE declarations upfront on seekable streams or inspect header bytes safely
+    if hasattr(xml_stream, "read") and hasattr(xml_stream, "seek"):
+        pos = xml_stream.tell()
+        head = xml_stream.read(4096)
+        xml_stream.seek(pos)
+        head_upper = head.upper()
+        if b"<!DOCTYPE" in head_upper or b"<!ENTITY" in head_upper:
+            raise SecurityValidationError(f"Disallowed DOCTYPE/ENTITY declaration in '{source_file_label}'.")
+
     context = etree.iterparse(
         xml_stream,
         events=("start", "end"),
@@ -69,10 +82,25 @@ def parse_xmldata_stream(
         for event, elem in context:
             tag = elem.tag
             if event == "start":
+                xml_depth += 1
+                node_count += 1
+                if xml_depth > ctx.config.max_xml_depth:
+                    raise SecurityValidationError(
+                        f"XML nesting depth {xml_depth} exceeds max_xml_depth={ctx.config.max_xml_depth} in '{source_file_label}'."
+                    )
+                if node_count > ctx.config.max_xml_nodes:
+                    raise SecurityValidationError(
+                        f"XML node count {node_count} exceeds max_xml_nodes={ctx.config.max_xml_nodes} in '{source_file_label}'."
+                    )
+                if node_count % 2000 == 0:
+                    ctx.check_cancelled()
+                    if (time.monotonic() - t_start) > ctx.config.max_parse_seconds:
+                        raise SecurityValidationError(
+                            f"XML parsing exceeded max_parse_seconds={ctx.config.max_parse_seconds}s in '{source_file_label}'."
+                        )
+
                 if tag == "Item":
                     item_ordinal += 1
-                    if item_ordinal % 250 == 0:
-                        ctx.check_cancelled()
                     attrs = dict(elem.attrib)
                     guid = attrs.get("GUID", "")
                     cls_name = attrs.get("Class", "Unknown")
@@ -97,6 +125,7 @@ def parse_xmldata_stream(
                 elif tag == "Properties":
                     in_properties = True
             elif event == "end":
+                xml_depth = max(0, xml_depth - 1)
                 if tag == "Property" and in_properties and stack:
                     frame = stack[-1]
                     prop_attrs = dict(elem.attrib)
@@ -120,9 +149,24 @@ def parse_xmldata_stream(
                     discovered_classes[c_obj.native_class] = discovered_classes.get(c_obj.native_class, 0) + 1
                     if not c_obj.is_known_class:
                         unsupported_classes[c_obj.native_class] = unsupported_classes.get(c_obj.native_class, 0) + 1
+                        unsupported_objects.append(
+                            {
+                                "native_guid": c_obj.native_guid,
+                                "native_class": c_obj.native_class,
+                                "native_type": c_obj.native_type,
+                                "name": c_obj.name,
+                                "parent_guid": c_obj.parent_guid,
+                                "source_location": f"{source_file_label}#{c_obj.root_path}",
+                                "property_count": len(c_obj.properties),
+                                "raw_attributes": c_obj.raw_attributes,
+                                "raw_properties": {
+                                    (p.name or p.native_property_guid): p.raw_value for p in c_obj.properties
+                                },
+                                "status": ProvenanceStatus.UNSUPPORTED.value,
+                            }
+                        )
                     provenance_records.append(obj_prov)
 
-                    # Attach finalized measurement section onto parent takeoff item frame if still open
                     if c_obj.is_measurement_section and stack and c_obj.sections:
                         stack[-1].child_sections.extend(c_obj.sections)
 
@@ -135,8 +179,6 @@ def parse_xmldata_stream(
     if not objects:
         raise SecurityValidationError(f"No PlanSwift <Item> elements found in '{source_file_label}'.")
 
-    # iterparse finishes children before parents; sort deterministically with depth=0 root first while keeping discovery index?
-    # Better: reverse/order by tree order using root->children order! Let's restore top-down document order cleanly:
     ordered_objects = _restore_document_order(objects)
     root_obj = ordered_objects[0]
 
@@ -148,6 +190,7 @@ def parse_xmldata_stream(
         objects=ordered_objects,
         discovered_classes=discovered_classes,
         unsupported_classes=unsupported_classes,
+        unsupported_objects=unsupported_objects,
         provenance_records=provenance_records,
     )
 
@@ -171,7 +214,6 @@ def _restore_document_order(postorder_objects: list[CanonicalObject]) -> list[Ca
 
     for r in roots:
         walk(r)
-    # Include any stray nodes if malformed hierarchy
     for obj in postorder_objects:
         if obj.native_guid.upper() not in visited:
             ordered.append(obj)
@@ -247,7 +289,7 @@ def _finalize_item_frame(
             derived_quantity=derived_qty,
             derived_unit=derived_unit,
             geometry=geom,
-            provenance=ProvenanceStatus.ORIGINAL,
+            provenance=ProvenanceStatus.NATIVE,
         )
         sections.append(section)
 
@@ -261,15 +303,16 @@ def _finalize_item_frame(
                 property_name="DigitizerData",
                 raw_formula=None,
                 native_stored_value=f"{geom.point_count} points",
+                reconstructed_quantity=derived_qty,
                 derived_quantity=derived_qty,
                 unit=derived_unit,
-                status=ProvenanceStatus.DERIVED,
-                notes="Derived strictly from native DigitizerData coordinates (no rasterization).",
+                provenance_classification=ProvenanceStatus.RECONSTRUCTED.value,
+                status=ProvenanceStatus.RECONSTRUCTED,
+                notes="Reconstructed strictly from native DigitizerData coordinates (zero rasterization).",
             )
         )
 
     elif behavior.role == "takeoff_item":
-        # Aggregate derived quantities from finalized child sections WITHOUT replacing raw Qty formula!
         qty_prop = props_by_name.get("Qty")
         raw_qty = qty_prop.raw_value if qty_prop else None
         is_takeoff_formula = raw_qty is not None and "[" in raw_qty
@@ -288,19 +331,21 @@ def _finalize_item_frame(
                 property_name="Qty",
                 raw_formula=raw_qty if is_takeoff_formula else None,
                 native_stored_value=raw_qty,
+                reconstructed_quantity=derived_total,
                 derived_quantity=derived_total,
                 unit=unit_val,
                 precision=qty_prop.decimal_places if qty_prop else None,
-                status=ProvenanceStatus.ORIGINAL if raw_qty is not None else ProvenanceStatus.UNRESOLVED,
+                calculation_formula=raw_qty if is_takeoff_formula else "",
+                provenance_classification=ProvenanceStatus.NATIVE.value,
+                status=ProvenanceStatus.NATIVE if raw_qty is not None else ProvenanceStatus.UNRESOLVED,
                 notes=(
-                    f"Raw formula '{raw_qty}' preserved; derived_quantity={derived_total} summed from {len(frame.child_sections)} child sections."
+                    f"Raw formula '{raw_qty}' preserved; raw section rollup={derived_total} across {len(frame.child_sections)} child sections."
                     if is_takeoff_formula
                     else None
                 ),
             )
         )
 
-        # Record dimensional template properties explicitly flagged when object is Count (not a measured length)
         for dim_name in ("Length", "Width", "Depth", "Wall Height"):
             dp = props_by_name.get(dim_name)
             if dp is not None and dp.raw_value.strip() != "":
@@ -319,7 +364,8 @@ def _finalize_item_frame(
                         unit=dp.units or dp.input_units,
                         precision=dp.decimal_places,
                         is_default_template_value=is_template_default,
-                        status=ProvenanceStatus.ORIGINAL,
+                        provenance_classification=ProvenanceStatus.NATIVE.value,
+                        status=ProvenanceStatus.NATIVE,
                         notes="Count default property template value; not a measured line length."
                         if is_template_default
                         else None,
@@ -354,7 +400,7 @@ def _finalize_item_frame(
         sections=sections,
         geometries=geometries,
         formulas=formulas,
-        provenance=ProvenanceStatus.ORIGINAL if behavior.known else ProvenanceStatus.UNSUPPORTED,
+        provenance=ProvenanceStatus.NATIVE if behavior.known else ProvenanceStatus.UNSUPPORTED,
         raw_attributes=frame.raw_attributes,
     )
 
@@ -364,7 +410,7 @@ def _finalize_item_frame(
         source_location=frame.root_path,
         source_object_guid=frame.native_guid,
         source_class=frame.native_class,
-        status=ProvenanceStatus.ORIGINAL if behavior.known else ProvenanceStatus.UNSUPPORTED,
+        status=ProvenanceStatus.NATIVE if behavior.known else ProvenanceStatus.UNSUPPORTED,
         parser_version=ctx.config.parser_version,
         extraction_run_id=ctx.run_id,
     )

@@ -29,13 +29,48 @@ export function GeometryDataViewer({ feature }: { feature: GeometryFeature }) {
           <div className="font-mono text-sm font-semibold">{feature.point_count}</div>
         </div>
         <div className="rounded bg-slate-50 p-2">
-          <div className="text-slate-500">BBox Min (X, Y)</div>
+          <div className="text-slate-500">Calibration Scale</div>
+          <div className="font-mono text-xs font-semibold">
+            {feature.is_calibrated && feature.scale_x
+              ? `${feature.scale_x} px/${feature.scale_unit || "unit"}`
+              : "Uncalibrated (raw px)"}
+          </div>
+        </div>
+        <div className="rounded bg-slate-50 p-2">
+          <div className="text-slate-500">Calibrated Length / Area</div>
+          <div className="font-mono text-xs font-semibold text-emerald-700">
+            {feature.calibrated_area != null
+              ? `${feature.calibrated_area.toFixed(2)} ${feature.calibrated_unit || ""}`
+              : feature.calibrated_length != null
+                ? `${feature.calibrated_length.toFixed(2)} ${feature.calibrated_unit || feature.scale_unit || ""}`
+                : feature.derived_polygon_area != null
+                  ? `${feature.derived_polygon_area.toFixed(2)} px²`
+                  : feature.derived_polyline_length != null
+                    ? `${feature.derived_polyline_length.toFixed(2)} px`
+                    : "—"}
+          </div>
+        </div>
+        <div className="rounded bg-slate-50 p-2">
+          <div className="text-slate-500">SI Metric Equivalent</div>
+          <div className="font-mono text-xs">
+            {feature.normalized_area_m2 != null
+              ? `${feature.normalized_area_m2.toFixed(2)} m²`
+              : feature.normalized_length_m != null
+                ? `${feature.normalized_length_m.toFixed(2)} m`
+                : "—"}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
+        <div className="rounded bg-slate-50 p-2">
+          <div className="text-slate-500">BBox Min (X, Y) px</div>
           <div className="font-mono text-xs">
             {feature.bbox_min_x !== null ? `${feature.bbox_min_x.toFixed(2)}, ${feature.bbox_min_y?.toFixed(2)}` : "—"}
           </div>
         </div>
         <div className="rounded bg-slate-50 p-2">
-          <div className="text-slate-500">BBox Max (X, Y)</div>
+          <div className="text-slate-500">BBox Max (X, Y) px</div>
           <div className="font-mono text-xs">
             {feature.bbox_max_x !== null ? `${feature.bbox_max_x.toFixed(2)}, ${feature.bbox_max_y?.toFixed(2)}` : "—"}
           </div>
@@ -51,10 +86,10 @@ export function GeometryDataViewer({ feature }: { feature: GeometryFeature }) {
           <thead className="bg-slate-50 font-semibold text-slate-600">
             <tr>
               <th className="px-3 py-2">#</th>
-              <th className="px-3 py-2">Raw X</th>
-              <th className="px-3 py-2">Raw Y</th>
+              <th className="px-3 py-2">Raw X (px)</th>
+              <th className="px-3 py-2">Raw Y (px)</th>
               <th className="px-3 py-2">PointType</th>
-              <th className="px-3 py-2">Normalized (X, Y)</th>
+              <th className="px-3 py-2">Calibrated ({feature.scale_unit || "units"})</th>
               <th className="px-3 py-2">Provenance</th>
             </tr>
           </thead>
@@ -65,7 +100,7 @@ export function GeometryDataViewer({ feature }: { feature: GeometryFeature }) {
                 <td className="px-3 py-1.5">{pt.raw_x}</td>
                 <td className="px-3 py-1.5">{pt.raw_y}</td>
                 <td className="px-3 py-1.5">{pt.point_type}</td>
-                <td className="px-3 py-1.5 text-slate-400">
+                <td className="px-3 py-1.5 text-slate-600">
                   {pt.normalized_x !== null ? `${pt.normalized_x}, ${pt.normalized_y}` : "uncalibrated (raw preserved)"}
                 </td>
                 <td className="px-3 py-1.5">

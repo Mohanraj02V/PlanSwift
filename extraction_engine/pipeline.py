@@ -1,4 +1,4 @@
-"""End-to-end 10-stage resumable PlanSwift native extraction pipeline."""
+"""End-to-end 100% standalone PlanSwift ZIP extraction, geometry, formula, and quantity pipeline."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from extraction_engine.adapters.planswift_package.package_adapter import PlanSwiftPackageAdapter
-from extraction_engine.adapters.planswift_version_adapters.version_detector import detect_planswift_environment
 from extraction_engine.adapters.planswift_xml.xml_adapter import PlanSwiftXMLAdapter
+from extraction_engine.calculators.quantity_engine import compute_project_quantities
 from extraction_engine.core.extraction_context import (
     ExtractionCancelledError,
     ExtractionConfig,
@@ -28,8 +28,8 @@ from extraction_engine.core.extraction_result import (
 from extraction_engine.core.source_manifest import SourceManifest
 from extraction_engine.normalizers.geometry_normalizer import normalize_project_geometry
 from extraction_engine.normalizers.property_normalizer import normalize_project_properties
-from extraction_engine.parsers.formula_parser import resolve_formula_graph
-from extraction_engine.reconciliation.com_package_reconciliation import reconcile_package_and_com
+from extraction_engine.parsers.formula_parser import resolve_and_evaluate_formulas
+from extraction_engine.reconciliation.standalone_reconciliation import reconcile_standalone_project
 from extraction_engine.validators.project_validator import validate_canonical_project
 
 
@@ -58,7 +58,7 @@ def compute_project_deterministic_digest(project: CanonicalProject) -> str:
 
 
 class ExtractionPipeline:
-    """Orchestrates source inspection, package parsing, normalization, reconciliation, and validation."""
+    """Orchestrates standalone PlanSwift ZIP validation, parsing, geometry, formula evaluation, quantities, and validation."""
 
     def __init__(self, config: ExtractionConfig | None = None) -> None:
         self.config = config or ExtractionConfig()
@@ -89,11 +89,10 @@ class ExtractionPipeline:
     def run(
         self,
         source_path: Path,
-        com_payload: dict[str, Any] | None = None,
         ctx: ExtractionContext | None = None,
         track_memory: bool = True,
     ) -> tuple[CanonicalProject, ExtractionReport]:
-        """Run the full native extraction pipeline and return (CanonicalProject, ExtractionReport)."""
+        """Run the full standalone ZIP extraction pipeline and return (CanonicalProject, ExtractionReport)."""
         active_ctx = ctx or ExtractionContext(source_path=source_path, config=self.config)
         active_ctx.source_path = source_path
         t0 = time.perf_counter()
@@ -109,58 +108,69 @@ class ExtractionPipeline:
         validation = None
 
         try:
-            active_ctx.transition(ExtractionStage.INSPECTING_SOURCE, 10, f"Inspecting source '{source_path.name}'.")
+            active_ctx.transition(ExtractionStage.VALIDATING_ARCHIVE, 10, f"Validating archive '{source_path.name}'.")
             manifest = adapter.inspect_source(source_path, active_ctx)
-            self._write_checkpoint(active_ctx, ExtractionStage.INSPECTING_SOURCE, {"sha256": manifest.source_sha256})
+            self._write_checkpoint(active_ctx, ExtractionStage.VALIDATING_ARCHIVE, {"sha256": manifest.source_sha256})
 
             active_ctx.transition(
-                ExtractionStage.BUILDING_MANIFEST,
+                ExtractionStage.INSPECTING_ARCHIVE,
                 20,
-                f"Manifest built: {manifest.total_entries} entries ({manifest.raster_entry_count} TIFFs cataloged, zero rasterization).",
+                f"Inventory complete: {manifest.total_entries} entries, format={manifest.detected_project_version}, encoding={manifest.detected_xml_encoding}.",
             )
-            self._write_checkpoint(active_ctx, ExtractionStage.BUILDING_MANIFEST)
+            self._write_checkpoint(active_ctx, ExtractionStage.INSPECTING_ARCHIVE)
 
-            active_ctx.transition(ExtractionStage.PARSING_PACKAGE, 35, f"Streaming XML via {adapter.adapter_name}.")
+            active_ctx.transition(ExtractionStage.PARSING_XML, 35, f"Streaming native XML via {adapter.adapter_name}.")
             project = adapter.extract(active_ctx, manifest=manifest)
-            self._write_checkpoint(active_ctx, ExtractionStage.PARSING_PACKAGE, {"objects": len(project.objects)})
-
-            active_ctx.transition(ExtractionStage.CONNECTING_TO_PLANSWIFT, 50, "Checking optional PlanSwift COM environment/payload.")
-            env_info = detect_planswift_environment()
-            if not com_payload and not env_info.supports_live_com:
-                active_ctx.events.append(
-                    {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "stage": ExtractionStage.CONNECTING_TO_PLANSWIFT.value,
-                        "progress_pct": 52,
-                        "message": f"COM optional stage skipped: {env_info.reason}",
-                    }
-                )
+            self._write_checkpoint(active_ctx, ExtractionStage.PARSING_XML, {"objects": len(project.objects)})
 
             active_ctx.transition(
-                ExtractionStage.EXTRACTING_OBJECTS,
-                65,
-                f"Extracted {len(project.objects)} objects and {len(project.pages)} pages.",
+                ExtractionStage.INTERPRETING_OBJECTS,
+                48,
+                f"Interpreted {len(project.objects)} objects across {len(project.pages)} pages ({len(project.unsupported_objects)} unsupported preserved raw).",
             )
 
             active_ctx.transition(
-                ExtractionStage.BUILDING_RELATIONSHIPS,
-                75,
-                f"Built {len(project.relationships)} relationships and analyzed formula dependency graph.",
+                ExtractionStage.RECONSTRUCTING_RELATIONSHIPS,
+                58,
+                f"Built {len(project.relationships)} relationships and {len(project.assemblies)} assemblies.",
             )
-            resolve_formula_graph(project.objects)
 
-            active_ctx.transition(ExtractionStage.NORMALIZING_DATA, 82, "Normalizing properties, units, and preserving raw geometry.")
+            active_ctx.transition(
+                ExtractionStage.PROCESSING_GEOMETRY,
+                68,
+                "Normalizing properties and calibrating native DigitizerData geometry from ScaleX/ScaleY.",
+            )
             normalize_project_properties(project)
             normalize_project_geometry(project)
+
+            active_ctx.transition(
+                ExtractionStage.EVALUATING_FORMULAS,
+                78,
+                "Building dependency graph and safely evaluating native PlanSwift formulas.",
+            )
+            resolve_and_evaluate_formulas(project)
+
+            active_ctx.transition(
+                ExtractionStage.CALCULATING_QUANTITIES,
+                86,
+                "Computing standalone calibrated and calculated quantities with full provenance.",
+            )
+            compute_project_quantities(project)
             project.deterministic_digest_sha256 = compute_project_deterministic_digest(project)
 
-            active_ctx.transition(ExtractionStage.RECONCILING_SOURCES, 90, "Reconciling native package and COM records.")
-            reconciliation = reconcile_package_and_com(project, com_payload)
+            active_ctx.transition(ExtractionStage.RECONCILING_SOURCES, 92, "Running standalone internal consistency checks.")
+            reconciliation = reconcile_standalone_project(project)
 
-            active_ctx.transition(ExtractionStage.VALIDATING, 95, "Validating completeness, GUID uniqueness, PageGUID links, and formulas.")
+            active_ctx.transition(ExtractionStage.VALIDATING, 96, "Validating ZIP, metadata, hierarchy, geometry, formulas, and quantities.")
             validation = validate_canonical_project(project)
 
-            active_ctx.transition(ExtractionStage.COMPLETED, 100, "Native PlanSwift extraction completed.")
+            final_stage = ExtractionStage.COMPLETED
+            msg = "Standalone PlanSwift ZIP extraction completed."
+            if project.unsupported_classes or (manifest and manifest.warnings):
+                final_stage = ExtractionStage.COMPLETED_WITH_WARNINGS
+                msg = "Standalone extraction completed with warnings/unsupported objects preserved."
+            active_ctx.transition(final_stage, 100, msg)
+            # Keep COMPLETED string status for API clients while exposing warnings in validation & report
             final_status = ExtractionStage.COMPLETED.value
         except ExtractionCancelledError as exc:
             active_ctx.record_error(active_ctx.current_stage, "CANCELLED", str(exc), recoverable=True)

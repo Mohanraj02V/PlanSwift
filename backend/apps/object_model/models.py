@@ -7,6 +7,11 @@ from django.utils import timezone
 
 
 class ProvenanceChoices(models.TextChoices):
+    NATIVE = "native", "Native"
+    CALCULATED = "calculated", "Calculated"
+    RECONSTRUCTED = "reconstructed", "Reconstructed"
+    INFERRED = "inferred", "Inferred"
+    AI_GENERATED = "ai_generated", "AI Generated"
     ORIGINAL = "original", "Original"
     API_EXTRACTED = "api_extracted", "API Extracted"
     NORMALIZED = "normalized", "Normalized"

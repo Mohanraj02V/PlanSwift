@@ -79,10 +79,9 @@ export default function ValidationPage() {
 
           {recs[0] && (
             <div className="rounded-lg border border-slate-200 bg-white p-4 text-xs">
-              <h2 className="mb-2 text-sm font-semibold">Latest COM-vs-Package Reconciliation</h2>
+              <h2 className="mb-2 text-sm font-semibold">Standalone Consistency &amp; Quantity Reconciliation</h2>
               <div className="font-mono">
-                Mode: {String(recs[0].mode)} | COM Available: {String(recs[0].com_available)} | Matched Objects:{" "}
-                {String(recs[0].matched_objects)} | Computed Values Applied: {String(recs[0].computed_values_applied)}
+                Mode: {String(recs[0].mode)} | Objects Checked: {String(recs[0].matched_objects)} | Calculated &amp; Reconstructed Values: {String(recs[0].computed_values_applied)} | Duplicate GUIDs: {String(recs[0].duplicate_guid_count)}
               </div>
             </div>
           )}

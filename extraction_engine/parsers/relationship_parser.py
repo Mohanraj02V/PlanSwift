@@ -39,7 +39,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     target_guid=obj.native_guid,
                     order_index=obj.order_index,
                     metadata={"child_class": obj.native_class, "child_name": obj.name},
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
 
@@ -53,7 +53,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     target_guid=obj.page_guid,
                     order_index=obj.order_index,
                     metadata={"target_exists": obj.page_guid.upper() in obj_by_guid},
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
 
@@ -69,7 +69,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                         target_guid=prop.dynamic_page_guid,
                         order_index=page_order_val,
                         metadata={"property_name": prop.name, "raw_value": prop.raw_value},
-                        provenance=ProvenanceStatus.ORIGINAL,
+                        provenance=ProvenanceStatus.NATIVE,
                     )
                 )
 
@@ -81,7 +81,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     relationship_type="group_member",
                     source_guid=obj.native_guid,
                     target_guid=obj.group_id,
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
 
@@ -95,7 +95,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                         source_guid=obj.native_guid,
                         target_guid=den.value,
                         metadata=den.metadata,
-                        provenance=ProvenanceStatus.ORIGINAL,
+                        provenance=ProvenanceStatus.NATIVE,
                     )
                 )
 
@@ -134,7 +134,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     quantity_raw=qty_prop.raw_value if qty_prop else None,
                     unit=unit_str,
                     cost_each_raw=cost_prop.raw_value if cost_prop else None,
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
             add_rel(
@@ -144,7 +144,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     source_guid=obj.native_guid,
                     target_guid=child.native_guid,
                     order_index=child.order_index,
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
 
@@ -156,7 +156,7 @@ def build_relationships_and_assemblies(project: CanonicalProject) -> None:
                     native_class=obj.native_class,
                     assembly_type=obj.native_type or obj.native_class or None,
                     components=components,
-                    provenance=ProvenanceStatus.ORIGINAL,
+                    provenance=ProvenanceStatus.NATIVE,
                 )
             )
 

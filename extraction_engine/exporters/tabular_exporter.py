@@ -1,4 +1,4 @@
-"""CSV and Excel (.xlsx) tabular exporters preserving PlanSwift GUIDs and provenance."""
+"""CSV and Excel (.xlsx) tabular exporters preserving PlanSwift GUIDs and standalone calculations."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from extraction_engine.core.extraction_result import CanonicalProject
 
 
 def export_takeoff_csv(project: CanonicalProject, output_path: Path) -> Path:
-    """Export takeoff objects summary CSV with native GUIDs, formulas, derived qty, and provenance."""
+    """Export takeoff objects summary CSV with native GUIDs, formulas, calculated qty, and provenance."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -25,8 +25,8 @@ def export_takeoff_csv(project: CanonicalProject, output_path: Path) -> Path:
                 "parent_guid",
                 "sections_count",
                 "raw_qty_formula",
-                "derived_quantity",
-                "planswift_computed_quantity",
+                "reconstructed_quantity",
+                "calculated_quantity",
                 "unit",
                 "provenance",
             ]
@@ -43,10 +43,10 @@ def export_takeoff_csv(project: CanonicalProject, output_path: Path) -> Path:
                     obj.native_type,
                     obj.name,
                     obj.parent_guid or "",
-                    len([c for c in obj.child_guids]),
+                    len(obj.child_guids),
                     qty_m.raw_formula if qty_m else "",
-                    qty_m.derived_quantity if qty_m else "",
-                    qty_m.planswift_computed_quantity if qty_m else "",
+                    qty_m.reconstructed_quantity if qty_m else "",
+                    qty_m.calculated_quantity if qty_m else "",
                     qty_m.unit if qty_m else "",
                     qty_m.status.value if qty_m else obj.provenance.value,
                 ]
@@ -55,11 +55,10 @@ def export_takeoff_csv(project: CanonicalProject, output_path: Path) -> Path:
 
 
 def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
-    """Export multi-sheet Excel workbook (Summary, Takeoff Items, Pages, Sections, Formulas)."""
+    """Export multi-sheet Excel workbook (Takeoff Objects, Pages, Sections Geometry, Formulas)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
 
-    # Sheet 1: Takeoff Items
     ws_items = wb.active
     ws_items.title = "Takeoff_Objects"
     ws_items.append(
@@ -72,8 +71,8 @@ def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
             "Phase",
             "Cost Code",
             "Raw Qty Formula",
-            "Derived Qty (Points/Geom)",
-            "PlanSwift Computed Qty",
+            "Reconstructed Qty",
+            "Calculated Qty",
             "Unit",
             "Provenance",
         ]
@@ -92,16 +91,15 @@ def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
                 obj.phase or "",
                 obj.cost_code or "",
                 qty_m.raw_formula if qty_m else "",
-                qty_m.derived_quantity if qty_m else "",
-                qty_m.planswift_computed_quantity if qty_m else "",
+                qty_m.reconstructed_quantity if qty_m else "",
+                qty_m.calculated_quantity if qty_m else "",
                 qty_m.unit if qty_m else "",
                 qty_m.status.value if qty_m else obj.provenance.value,
             ]
         )
 
-    # Sheet 2: Pages
     ws_pages = wb.create_sheet("Pages")
-    ws_pages.append(["Page GUID", "Name", "Page Type", "OrderIndex", "Scale Units", "TIFF Archive Path", "Section Count"])
+    ws_pages.append(["Page GUID", "Name", "Page Type", "OrderIndex", "ScaleX", "ScaleY", "Scale Units", "TIFF Archive Path", "Section Count"])
     for pg in project.pages:
         ws_pages.append(
             [
@@ -109,15 +107,16 @@ def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
                 pg.name,
                 pg.page_type,
                 pg.order_index,
+                pg.scale_x,
+                pg.scale_y,
                 pg.scale_units or "",
                 pg.tiff_archive_path or "",
                 pg.section_count,
             ]
         )
 
-    # Sheet 3: Sections & Geometry
     ws_sec = wb.create_sheet("Sections_Geometry")
-    ws_sec.append(["Section GUID", "Parent Object GUID", "Class", "Page GUID", "Geometry Type", "Point Count", "Derived Qty", "Provenance"])
+    ws_sec.append(["Section GUID", "Parent Object GUID", "Class", "Page GUID", "Geometry Type", "Point Count", "Calibrated", "Derived Qty", "Unit", "Provenance"])
     for obj in project.objects:
         for sec in obj.sections:
             ws_sec.append(
@@ -128,14 +127,15 @@ def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
                     sec.page_guid or "",
                     sec.geometry.geometry_type if sec.geometry else "",
                     sec.point_count,
+                    sec.geometry.is_calibrated if sec.geometry else False,
                     sec.derived_quantity,
+                    sec.derived_unit or "",
                     sec.provenance.value,
                 ]
             )
 
-    # Sheet 4: Formulas
     ws_form = wb.create_sheet("Formulas")
-    ws_form.append(["Object GUID", "Property GUID", "Property Name", "Raw Expression", "PascalScript", "Has Cycle", "Status", "Evaluated Value"])
+    ws_form.append(["Object GUID", "Property GUID", "Property Name", "Raw Expression", "PascalScript", "Has Cycle", "Status", "Calculated Value", "Reason"])
     for obj in project.objects:
         for f in obj.formulas:
             ws_form.append(
@@ -147,7 +147,8 @@ def export_project_excel(project: CanonicalProject, output_path: Path) -> Path:
                     f.is_pascal_script,
                     f.has_circular_dependency,
                     f.evaluation_status.value,
-                    f.planswift_evaluated_value or "",
+                    f.calculated_value or "",
+                    f.calculation_reason or "",
                 ]
             )
 

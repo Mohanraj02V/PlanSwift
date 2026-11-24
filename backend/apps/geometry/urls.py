@@ -34,6 +34,15 @@ class GeometryFeatureListSerializer(serializers.ModelSerializer):
             "bbox_max_y",
             "derived_polyline_length",
             "derived_polygon_area",
+            "scale_x",
+            "scale_y",
+            "scale_unit",
+            "is_calibrated",
+            "calibrated_length",
+            "calibrated_area",
+            "calibrated_unit",
+            "normalized_length_m",
+            "normalized_area_m2",
             "provenance",
             "derived_metrics_provenance",
         ]
@@ -48,7 +57,7 @@ class GeometryFeatureDetailSerializer(GeometryFeatureListSerializer):
 
 class GeometryListView(generics.ListAPIView):
     serializer_class = GeometryFeatureListSerializer
-    filterset_fields = ["project_version", "project_version__project", "page_guid", "geometry_type", "parent_object_guid"]
+    filterset_fields = ["project_version", "project_version__project", "page_guid", "geometry_type", "parent_object_guid", "section_guid", "is_calibrated"]
     search_fields = ["section_guid", "parent_object_guid", "page_guid"]
 
     def get_queryset(self):

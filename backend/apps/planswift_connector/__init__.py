@@ -1,1 +1,0 @@
-"""PlanSwift COM connector app."""

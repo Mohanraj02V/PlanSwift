@@ -1,4 +1,4 @@
-"""Command-line interface for inspecting, extracting, validating, and exporting PlanSwift projects."""
+"""Command-line interface for inspecting, extracting, validating, and exporting PlanSwift ZIP projects."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-from extraction_engine.adapters.planswift_version_adapters.version_detector import detect_planswift_environment
 from extraction_engine.exporters.geometry_exporter import export_geometry_geojson
 from extraction_engine.exporters.json_exporter import export_objects_jsonl, export_project_json
 from extraction_engine.exporters.tabular_exporter import export_project_excel, export_takeoff_csv
@@ -16,7 +15,7 @@ from extraction_engine.pipeline import ExtractionPipeline
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="vortexen-extract", description="PlanSwift Native Project Extraction CLI")
+    parser = argparse.ArgumentParser(prog="vortexen-extract", description="Standalone PlanSwift ZIP Extraction CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_inspect = sub.add_parser("inspect", help="Inspect container manifest without full extraction")
@@ -29,14 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("--source", required=True, type=Path)
     p_export.add_argument("--out-dir", required=True, type=Path)
 
-    sub.add_parser("detect-com", help="Check Windows PlanSwift COM registration")
-
     args = parser.parse_args(argv)
-
-    if args.command == "detect-com":
-        info = detect_planswift_environment()
-        print(json.dumps(info.__dict__, indent=2))
-        return 0
 
     if args.command == "inspect":
         manifest = inspect_archive_manifest(args.source)

@@ -1,4 +1,4 @@
-"""Safe streaming PlanSwift archive/package inspector with Zip Slip, zip bomb, and symlink protection."""
+"""Safe streaming PlanSwift archive/package inspector with Zip Slip, zip bomb, duplicate-path, and symlink protection."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import posixpath
 import re
 import stat
 import zipfile
+import zlib
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,16 @@ from extraction_engine.core.source_manifest import SourceFileEntry, SourceManife
 _GUID_FILENAME_RE = re.compile(r"(\{[0-9A-Fa-f-]{36}\})\.(?:tiff|tif|png|jpg|jpeg)$", re.IGNORECASE)
 _NESTED_ARCHIVE_EXTS = (".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz")
 _RASTER_EXTS = (".tiff", ".tif", ".png", ".jpg", ".jpeg", ".bmp", ".gif")
+_XML_ENCODING_RE = re.compile(rb'<\?xml[^>]*encoding=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _detect_xml_encoding_header(header_bytes: bytes) -> str:
+    if header_bytes.startswith(b"\xef\xbb\xbf"):
+        return "UTF-8"
+    match = _XML_ENCODING_RE.search(header_bytes[:512])
+    if match:
+        return match.group(1).decode("ascii", errors="replace")
+    return "UTF-8" if header_bytes.lstrip().startswith(b"<?xml") else "Windows-1252"
 
 
 def validate_source_path_allowed(source_path: Path, config: ExtractionConfig) -> Path:
@@ -73,18 +84,38 @@ def inspect_archive_manifest(source_path: Path, config: ExtractionConfig | None 
     if resolved.is_dir():
         return _inspect_directory_source(resolved, cfg)
 
-    with resolved.open("rb") as fh:
-        magic = fh.read(16)
-    magic_hex = " ".join(f"{b:02X}" for b in magic)
     file_size = resolved.stat().st_size
+    if file_size == 0:
+        raise SecurityValidationError(f"Source file '{resolved.name}' is empty (0 bytes).")
+    if file_size > cfg.max_upload_bytes:
+        raise SecurityValidationError(
+            f"Source file size ({file_size} bytes) exceeds max_upload_bytes={cfg.max_upload_bytes}."
+        )
+
+    with resolved.open("rb") as fh:
+        magic = fh.read(512)
+    magic_prefix = magic[:16]
+    magic_hex = " ".join(f"{b:02X}" for b in magic_prefix)
     source_sha256 = compute_file_sha256(resolved, chunk_size=cfg.hash_chunk_size)
 
-    # Check if PKZIP (PK\x03\x04 or empty PK\x05\x06)
-    if magic.startswith(b"PK\x03\x04") or zipfile.is_zipfile(resolved):
+    # Check if PKZIP (PK\x03\x04 or PK\x05\x06)
+    if magic_prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")) or zipfile.is_zipfile(resolved):
         return _inspect_zip_manifest(resolved, file_size, source_sha256, magic_hex, cfg)
 
+    # Reject corrupted files disguised with .zip/.swiftjob extension
+    if resolved.suffix.lower() in (".zip", ".swiftjob", ".swift"):
+        raise SecurityValidationError(
+            f"Corrupted or invalid ZIP archive '{resolved.name}' (signature={magic_hex})."
+        )
+
     # Direct XMLData.XML fallback
-    if magic.lstrip().startswith(b"<?xml") or magic.lstrip().startswith(b"<Item"):
+    stripped_magic = magic.lstrip()
+    if stripped_magic.startswith(b"<?xml") or stripped_magic.startswith(b"<Item"):
+        if file_size > cfg.max_xml_bytes:
+            raise SecurityValidationError(
+                f"XML file size ({file_size}) exceeds max_xml_bytes={cfg.max_xml_bytes}."
+            )
+        enc = _detect_xml_encoding_header(magic)
         entry = SourceFileEntry(
             relative_path=resolved.name,
             file_name=resolved.name,
@@ -109,6 +140,8 @@ def inspect_archive_manifest(source_path: Path, config: ExtractionConfig | None 
             total_uncompressed_bytes=file_size,
             xml_entry_path=resolved.name,
             xml_entry_size=file_size,
+            detected_xml_encoding=enc,
+            detected_project_version="PlanSwift-XML-Direct",
             entries=[entry],
         )
 
@@ -121,9 +154,11 @@ def _inspect_directory_source(resolved: Path, cfg: ExtractionConfig) -> SourceMa
     entries: list[SourceFileEntry] = []
     xml_entry_path: str | None = None
     xml_entry_size = 0
+    detected_encoding = ""
     raster_count = 0
     raster_bytes = 0
     total_bytes = 0
+    warnings: list[str] = []
 
     for root, _, files in os.walk(resolved):
         for fname in sorted(files):
@@ -143,6 +178,8 @@ def _inspect_directory_source(resolved: Path, cfg: ExtractionConfig) -> SourceMa
             if is_xml:
                 xml_entry_path = rel
                 xml_entry_size = size
+                with fpath.open("rb") as xfh:
+                    detected_encoding = _detect_xml_encoding_header(xfh.read(512))
             if is_raster:
                 raster_count += 1
                 raster_bytes += size
@@ -163,13 +200,17 @@ def _inspect_directory_source(resolved: Path, cfg: ExtractionConfig) -> SourceMa
                 raise SecurityValidationError("Directory entry limit exceeded.")
 
     container_format = "directory_project"
+    detected_version = "PlanSwift-XML-SingleData"
     dir_sha256 = ""
     if xml_entry_path is not None:
         dir_sha256 = compute_file_sha256(resolved / xml_entry_path, cfg.hash_chunk_size)
     elif (resolved / "Data.xml").is_file():
         container_format = "planswift_job_directory"
+        detected_version = "PlanSwift-XML-MultiData-Folder"
         xml_entry_path = "Data.xml"
         xml_entry_size = (resolved / "Data.xml").stat().st_size
+        with (resolved / "Data.xml").open("rb") as xfh:
+            detected_encoding = _detect_xml_encoding_header(xfh.read(512))
         hasher = hashlib.sha256()
         for entry in entries:
             if entry.file_name.lower() == "data.xml":
@@ -177,6 +218,8 @@ def _inspect_directory_source(resolved: Path, cfg: ExtractionConfig) -> SourceMa
                 hasher.update(entry.relative_path.encode("utf-8"))
                 hasher.update((resolved / entry.relative_path).read_bytes())
         dir_sha256 = hasher.hexdigest()
+    else:
+        warnings.append("Directory contains neither XMLData.XML nor Data.xml.")
 
     return SourceManifest(
         source_path=str(resolved),
@@ -191,8 +234,11 @@ def _inspect_directory_source(resolved: Path, cfg: ExtractionConfig) -> SourceMa
         total_uncompressed_bytes=total_bytes,
         xml_entry_path=xml_entry_path,
         xml_entry_size=xml_entry_size,
+        detected_xml_encoding=detected_encoding,
+        detected_project_version=detected_version,
         raster_entry_count=raster_count,
         raster_total_bytes=raster_bytes,
+        warnings=warnings,
         entries=entries,
     )
 
@@ -206,15 +252,26 @@ def _inspect_zip_manifest(
 ) -> SourceManifest:
     entries: list[SourceFileEntry] = []
     crc_groups: dict[str, list[str]] = {}
+    seen_paths_lower: dict[str, list[str]] = {}
     suspicious: list[str] = []
+    corrupted: list[str] = []
+    warnings: list[str] = []
     xml_entry_path: str | None = None
     xml_entry_size = 0
+    detected_encoding = ""
+    detected_version = "PlanSwift-XML-SingleData"
+    has_data_xml_fallback = False
     raster_count = 0
     raster_bytes = 0
     total_comp = 0
     total_uncomp = 0
 
-    with zipfile.ZipFile(resolved, mode="r") as zf:
+    try:
+        zf = zipfile.ZipFile(resolved, mode="r")
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise SecurityValidationError(f"Corrupted or unreadable ZIP archive '{resolved.name}': {exc}") from exc
+
+    with zf:
         infos = zf.infolist()
         if len(infos) > cfg.max_archive_entries:
             raise SecurityValidationError(
@@ -227,6 +284,8 @@ def _inspect_zip_manifest(
                 raise SecurityValidationError(f"Archive contains forbidden symlink: {rel_path}")
             if info.is_dir():
                 continue
+
+            seen_paths_lower.setdefault(rel_path.lower(), []).append(rel_path)
 
             uncomp = int(info.file_size)
             comp = int(info.compress_size)
@@ -259,8 +318,19 @@ def _inspect_zip_manifest(
                     raise SecurityValidationError(
                         f"XMLData.XML size ({uncomp}) exceeds max_xml_bytes={cfg.max_xml_bytes}."
                     )
+                if uncomp == 0:
+                    corrupted.append(rel_path)
+                    raise SecurityValidationError(f"Empty XML entry '{rel_path}' in archive.")
                 xml_entry_path = rel_path
                 xml_entry_size = uncomp
+                try:
+                    with zf.open(info, mode="r") as xfh:
+                        detected_encoding = _detect_xml_encoding_header(xfh.read(512))
+                except (zipfile.BadZipFile, zlib.error, RuntimeError, EOFError) as exc:
+                    corrupted.append(rel_path)
+                    raise SecurityValidationError(f"Corrupted ZIP XML stream '{rel_path}': {exc}") from exc
+            elif fname.lower() == "data.xml" and rel_path.lower() == "data.xml":
+                has_data_xml_fallback = True
 
             is_raster = ext in _RASTER_EXTS
             guid_match = _GUID_FILENAME_RE.search(fname)
@@ -295,6 +365,21 @@ def _inspect_zip_manifest(
                 )
             )
 
+    if xml_entry_path is None and has_data_xml_fallback:
+        detected_version = "PlanSwift-XML-MultiData-Zip"
+        warnings.append("Archive contains root Data.xml without XMLData.XML; attempting Data.xml fallback.")
+        data_entry = next((e for e in entries if e.relative_path.lower() == "data.xml"), None)
+        if data_entry:
+            xml_entry_path = data_entry.relative_path
+            xml_entry_size = data_entry.uncompressed_size
+            data_entry.is_xml_data = True
+    elif xml_entry_path is None:
+        warnings.append("Archive does not contain XMLData.XML.")
+
+    duplicate_paths = [p for paths in seen_paths_lower.values() if len(paths) > 1 for p in paths]
+    if duplicate_paths:
+        warnings.append(f"Detected {len(duplicate_paths)} duplicate/case-colliding archive paths.")
+
     duplicates = {k: paths for k, paths in crc_groups.items() if len(paths) > 1}
     return SourceManifest(
         source_path=str(resolved),
@@ -309,10 +394,15 @@ def _inspect_zip_manifest(
         total_uncompressed_bytes=total_uncomp,
         xml_entry_path=xml_entry_path,
         xml_entry_size=xml_entry_size,
+        detected_xml_encoding=detected_encoding,
+        detected_project_version=detected_version,
         raster_entry_count=raster_count,
         raster_total_bytes=raster_bytes,
         duplicate_crc_groups=duplicates,
+        duplicate_paths=duplicate_paths,
+        corrupted_entries=corrupted,
         suspicious_entries=suspicious,
+        warnings=warnings,
         entries=entries,
     )
 
@@ -327,22 +417,26 @@ def _read_order_index(item_elem: etree._Element) -> int:
     return 10**9
 
 
-def merge_planswift_job_directory_xml(root_dir: Path) -> bytes:
+def merge_planswift_job_directory_xml(root_dir: Path, max_depth: int = 64) -> bytes:
     """Merge an unzipped PlanSwift job directory (nested Data.xml files) into a single XMLData.xml byte payload."""
     parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)
 
-    def _load_item(folder: Path) -> etree._Element:
+    def _load_item(folder: Path, depth: int = 0) -> etree._Element:
+        if depth > max_depth:
+            raise SecurityValidationError(f"Directory XML nesting depth exceeds max_xml_depth={max_depth}.")
         data_xml = folder / "Data.xml"
         try:
             tree = etree.parse(str(data_xml), parser)
         except etree.XMLSyntaxError as exc:
             raise SecurityValidationError(f"Unsafe or malformed XML in '{data_xml}': {exc}") from exc
+        if tree.docinfo and tree.docinfo.doctype:
+            raise SecurityValidationError(f"Disallowed DOCTYPE/DTD in '{data_xml}'.")
         elem = tree.getroot()
 
         child_items: list[tuple[int, str, etree._Element]] = []
         for child_dir in folder.iterdir():
             if child_dir.is_dir() and not child_dir.is_symlink() and (child_dir / "Data.xml").is_file():
-                child_elem = _load_item(child_dir)
+                child_elem = _load_item(child_dir, depth=depth + 1)
                 child_items.append((_read_order_index(child_elem), child_dir.name.lower(), child_elem))
 
         child_items.sort(key=lambda entry: (entry[0], entry[1]))
@@ -350,7 +444,7 @@ def merge_planswift_job_directory_xml(root_dir: Path) -> bytes:
             elem.append(child_elem)
         return elem
 
-    root_elem = _load_item(root_dir)
+    root_elem = _load_item(root_dir, 0)
     return etree.tostring(root_elem, encoding="utf-8", xml_declaration=True)
 
 

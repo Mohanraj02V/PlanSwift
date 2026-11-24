@@ -49,13 +49,16 @@ class Measurement(models.Model):
     raw_formula = models.TextField(blank=True)
     native_stored_value = models.TextField(blank=True)
     planswift_computed_quantity = models.FloatField(null=True, blank=True)
+    calculated_quantity = models.FloatField(null=True, blank=True)
+    reconstructed_quantity = models.FloatField(null=True, blank=True)
     derived_quantity = models.FloatField(null=True, blank=True)
     unit = models.CharField(max_length=64, blank=True)
     normalized_quantity = models.FloatField(null=True, blank=True)
     normalized_unit = models.CharField(max_length=64, blank=True)
     precision = models.CharField(max_length=32, blank=True)
     is_default_template_value = models.BooleanField(default=False)
-    status = models.CharField(max_length=32, default="original", db_index=True)
+    calculation_inputs_json = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=32, default="native", db_index=True)
     notes = models.TextField(blank=True)
 
     class Meta:

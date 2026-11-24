@@ -88,3 +88,48 @@ export async function downloadExportFile(projectId: string, exportFormat: string
   }
   return resp.blob();
 }
+
+export interface ZipUploadResult {
+  source: import("@/types/api").ProjectSource;
+  extraction_run: import("@/types/api").ExtractionRun | null;
+}
+
+export function uploadProjectZipWithProgress(
+  projectId: string,
+  file: File,
+  autoExtract: boolean,
+  onProgress: (pct: number) => void
+): Promise<ZipUploadResult> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}/project-sources/upload/`);
+    const token = getAccessToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        onProgress(Math.round((ev.loaded / ev.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      try {
+        const parsed = JSON.parse(xhr.responseText || "{}");
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(parsed as ZipUploadResult);
+        } else {
+          const msg = parsed?.error?.detail ?? parsed?.detail ?? `Upload failed (${xhr.status})`;
+          reject(new ApiClientError(typeof msg === "string" ? msg : JSON.stringify(msg), xhr.status, parsed));
+        }
+      } catch {
+        reject(new ApiClientError(`Upload failed (${xhr.status})`, xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new ApiClientError("Network error during ZIP upload.", 0));
+    const form = new FormData();
+    form.append("project", projectId);
+    form.append("auto_extract", autoExtract ? "true" : "false");
+    form.append("file", file);
+    xhr.send(form);
+  });
+}

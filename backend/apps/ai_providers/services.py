@@ -42,13 +42,15 @@ class DeterministicGroundedProvider:
                 for m in obj.get("measurements", []):
                     if m.get("property_name") == "Qty":
                         raw_f = m.get("raw_formula") or m.get("native_stored_value") or ""
-                        ps_q = m.get("planswift_computed_quantity")
+                        calc_q = m.get("calculated_quantity")
+                        recon_q = m.get("reconstructed_quantity")
                         drv_q = m.get("derived_quantity")
                         unit = m.get("unit") or ""
-                        if ps_q is not None:
-                            meas_summary.append(f"PlanSwift Qty={ps_q} {unit} (status=computed_by_planswift, formula={raw_f})")
-                        elif drv_q is not None:
-                            meas_summary.append(f"derived_qty={drv_q} {unit} from {obj.get('section_count', 0)} DigitizerData sections (raw formula={raw_f}, status=derived)")
+                        if calc_q is not None:
+                            meas_summary.append(f"Calculated Qty={calc_q} {unit} (status=calculated, formula={raw_f})")
+                        elif recon_q is not None or drv_q is not None:
+                            qval = recon_q if recon_q is not None else drv_q
+                            meas_summary.append(f"reconstructed_qty={qval} {unit} from {obj.get('section_count', 0)} DigitizerData sections (raw formula={raw_f}, status=reconstructed)")
                         else:
                             meas_summary.append(f"raw_formula={raw_f} (status=unresolved)")
                 lines.append(
@@ -72,14 +74,14 @@ class DeterministicGroundedProvider:
 
         if unresolved_formulas:
             lines.append(
-                f"Note: {len(unresolved_formulas)} formula expression(s) (e.g. PascalScript or system variables) remain marked 'unresolved' without live PlanSwift COM evaluation."
+                f"Note: {len(unresolved_formulas)} formula expression(s) (e.g. external settings, PageWidth/Height, or custom script) remain explicitly marked 'unresolved'."
             )
 
         if kb_snippets:
             lines.append(f"Supporting knowledge context ({len(kb_snippets)} snippet(s)): {kb_snippets[0].get('title', '')}.")
 
-        has_derived = any(s.get("provenance") == "derived" for s in source_objects)
-        data_status = "derived" if has_derived else ("original" if source_objects else "unresolved")
+        has_calc = any(s.get("provenance") in ("calculated", "reconstructed", "derived") for s in source_objects)
+        data_status = "calculated" if any(s.get("provenance") == "calculated" for s in source_objects) else ("reconstructed" if has_calc else ("native" if source_objects else "unresolved"))
 
         return {
             "answer": "\n".join(lines),

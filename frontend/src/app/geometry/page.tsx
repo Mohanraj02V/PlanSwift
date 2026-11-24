@@ -50,6 +50,7 @@ export default function GeometryPage() {
               <tr>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Points</th>
+                <th className="px-3 py-2">Calibrated</th>
                 <th className="px-3 py-2">Section GUID</th>
                 <th className="px-3 py-2">Provenance</th>
               </tr>
@@ -59,6 +60,15 @@ export default function GeometryPage() {
                 <tr key={f.id} onClick={() => inspectGeometry(f.id)} className="cursor-pointer hover:bg-blue-50">
                   <td className="px-3 py-2 font-medium">{f.geometry_type}</td>
                   <td className="px-3 py-2 font-mono font-semibold">{f.point_count}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-emerald-700">
+                    {f.is_calibrated
+                      ? f.calibrated_area != null
+                        ? `${f.calibrated_area.toFixed(1)} ${f.calibrated_unit || ""}`
+                        : f.calibrated_length != null
+                          ? `${f.calibrated_length.toFixed(1)} ${f.scale_unit || ""}`
+                          : "Yes"
+                      : "Raw px"}
+                  </td>
                   <td className="px-3 py-2 font-mono text-[11px] text-slate-600">{f.section_guid}</td>
                   <td className="px-3 py-2">
                     <ProvenanceBadge status={f.provenance} />

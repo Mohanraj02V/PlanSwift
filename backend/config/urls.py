@@ -31,7 +31,6 @@ urlpatterns = [
     path("api/v1/projects/", include("apps.projects.urls")),
     path("api/v1/project-sources/", include("apps.project_sources.urls")),
     path("api/v1/source-inventory/", include("apps.source_inventory.urls")),
-    path("api/v1/planswift/", include("apps.planswift_connector.urls")),
     path("api/v1/extraction/", include("apps.extraction.urls")),
     path("api/v1/objects/", include("apps.object_model.urls")),
     path("api/v1/hierarchy/", include("apps.object_hierarchy.urls")),

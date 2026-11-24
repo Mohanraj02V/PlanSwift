@@ -141,8 +141,9 @@ class HybridRetrievalService:
                     "property_name": m.property_name,
                     "raw_formula": m.raw_formula,
                     "native_stored_value": m.native_stored_value,
+                    "calculated_quantity": m.calculated_quantity,
+                    "reconstructed_quantity": m.reconstructed_quantity,
                     "derived_quantity": m.derived_quantity,
-                    "planswift_computed_quantity": m.planswift_computed_quantity,
                     "unit": m.unit,
                     "status": m.status,
                     "is_default_template_value": m.is_default_template_value,
@@ -151,10 +152,10 @@ class HybridRetrievalService:
             ]
             qty_m = next((m for m in meas_list if m["property_name"] == "Qty"), None)
             if qty_m:
-                if qty_m["planswift_computed_quantity"] is not None:
-                    qty_prov = "computed_by_planswift"
-                elif qty_m["derived_quantity"] is not None:
-                    qty_prov = "derived"
+                if qty_m["calculated_quantity"] is not None:
+                    qty_prov = "calculated"
+                elif qty_m["reconstructed_quantity"] is not None or qty_m["derived_quantity"] is not None:
+                    qty_prov = "reconstructed"
                 else:
                     qty_prov = qty_m["status"]
             else:

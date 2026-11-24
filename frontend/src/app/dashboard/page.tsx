@@ -62,7 +62,7 @@ export default function DashboardPage() {
             {latestVal ? `${latestVal.overall_verified_accuracy_pct}%` : "—"}
           </div>
           <div className="mt-1 text-xs text-slate-500">
-            {latestVal ? `${latestVal.unresolved_formulas} unresolved runtime formulas` : "No runs validated yet"}
+            {latestVal ? `${latestVal.unresolved_formulas} unresolved / ${latestVal.unknown_class_objects} unsupported` : "No runs validated yet"}
           </div>
         </div>
       </div>

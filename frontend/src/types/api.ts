@@ -1,12 +1,17 @@
 export type ProvenanceStatus =
+  | "native"
+  | "calculated"
+  | "reconstructed"
+  | "inferred"
+  | "ai_generated"
+  | "unresolved"
+  | "unsupported"
   | "original"
   | "api_extracted"
   | "normalized"
   | "computed_by_planswift"
   | "derived"
-  | "ai_inferred"
-  | "unresolved"
-  | "unsupported";
+  | "ai_inferred";
 
 export interface UserProfile {
   id: string;
@@ -46,6 +51,7 @@ export interface Project {
   description: string;
   notes: string;
   project_type: string;
+  native_project_version?: string;
   measurement_system: string;
   excel_workbook_connected: boolean | null;
   xml_encoding: string;
@@ -61,7 +67,6 @@ export interface ProjectSource {
   id: string;
   project: string;
   source_kind: string;
-  source_path: string;
   source_name: string;
   actual_extension: string;
   magic_bytes_hex: string;
@@ -189,13 +194,16 @@ export interface MeasurementRecord {
   property_name: string;
   raw_formula: string;
   native_stored_value: string;
-  planswift_computed_quantity: number | null;
+  calculated_quantity?: number | null;
+  reconstructed_quantity?: number | null;
+  planswift_computed_quantity?: number | null;
   derived_quantity: number | null;
   unit: string;
   normalized_quantity: number | null;
   normalized_unit: string;
   precision: string;
   is_default_template_value: boolean;
+  calculation_inputs_json?: Record<string, unknown>;
   status: ProvenanceStatus;
   notes: string;
 }
@@ -226,6 +234,15 @@ export interface GeometryFeature {
   bbox_max_y: number | null;
   derived_polyline_length: number | null;
   derived_polygon_area: number | null;
+  scale_x?: number | null;
+  scale_y?: number | null;
+  scale_unit?: string;
+  is_calibrated?: boolean;
+  calibrated_length?: number | null;
+  calibrated_area?: number | null;
+  calibrated_unit?: string;
+  normalized_length_m?: number | null;
+  normalized_area_m2?: number | null;
   raw_digitizer_xml?: string;
   points?: GeometryPoint[];
   provenance: ProvenanceStatus;
@@ -245,7 +262,12 @@ export interface FormulaRecord {
   circular_path: string[];
   unresolved_references: string[];
   evaluation_status: ProvenanceStatus;
-  planswift_evaluated_value: string;
+  calculated_value?: string;
+  calculated_numeric?: number | null;
+  calculation_unit?: string;
+  calculation_reason?: string;
+  calculation_inputs_json?: Record<string, unknown>;
+  planswift_evaluated_value?: string;
   dependencies: Array<{
     raw_token: string;
     reference_kind: string;

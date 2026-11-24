@@ -21,6 +21,11 @@ class Formula(models.Model):
     unresolved_references = models.JSONField(default=list, blank=True)
     evaluation_status = models.CharField(max_length=32, default="unresolved", db_index=True)
     planswift_evaluated_value = models.TextField(blank=True)
+    calculated_value = models.TextField(blank=True, default="")
+    calculated_numeric = models.FloatField(null=True, blank=True)
+    calculation_unit = models.CharField(max_length=64, blank=True, default="")
+    calculation_reason = models.CharField(max_length=128, blank=True, default="")
+    calculation_inputs_json = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = "formulas"

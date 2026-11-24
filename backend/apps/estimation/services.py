@@ -40,12 +40,15 @@ def generate_estimation_session(project: Project, user, session_name: str = "") 
     total_qty_by_class: dict[str, float] = {}
     for obj in takeoff_objs:
         qty_m = next((m for m in obj.measurements.all() if m.property_name == "Qty"), None)
-        if qty_m and qty_m.planswift_computed_quantity is not None:
-            qty = qty_m.planswift_computed_quantity
-            source_status = "computed_by_planswift"
+        if qty_m and qty_m.calculated_quantity is not None:
+            qty = qty_m.calculated_quantity
+            source_status = "calculated"
+        elif qty_m and qty_m.reconstructed_quantity is not None:
+            qty = qty_m.reconstructed_quantity
+            source_status = "reconstructed"
         elif qty_m and qty_m.derived_quantity is not None:
             qty = qty_m.derived_quantity
-            source_status = "derived"
+            source_status = "reconstructed"
         else:
             qty = 0.0
             source_status = "unresolved"

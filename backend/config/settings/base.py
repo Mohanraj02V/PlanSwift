@@ -44,7 +44,6 @@ INSTALLED_APPS = [
     "apps.projects",
     "apps.project_sources",
     "apps.source_inventory",
-    "apps.planswift_connector",
     "apps.extraction",
     "apps.background_jobs",
     # Domain: Canonical Digital Project Model
@@ -204,10 +203,14 @@ CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()
 ]
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50 MiB API payload limit (large SwiftJobs use local extraction path)
-FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50 MiB JSON payload limit
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024  # 2 MiB; multipart ZIP uploads stream straight to disk
+FILE_UPLOAD_HANDLERS = [
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+]
+MAX_UPLOAD_ZIP_BYTES = int(os.environ.get("MAX_UPLOAD_ZIP_BYTES", str(1024 * 1024 * 1024)))  # 1 GiB
 
-# Source Ingestion Security
+# Source Ingestion & Extraction Guardrails
 ALLOWED_SOURCE_ROOTS = [
     str(Path(p.strip()).resolve())
     for p in os.environ.get("ALLOWED_SOURCE_ROOTS", str(WORKSPACE_ROOT)).split(";")
@@ -216,15 +219,17 @@ ALLOWED_SOURCE_ROOTS = [
 PLANSWIFT_DEFAULT_SOURCE_PATH = os.environ.get("PLANSWIFT_SOURCE_PATH", str(WORKSPACE_ROOT / "project 4.SwiftJob.zip"))
 EXTRACTION_WORK_DIR = Path(os.environ.get("EXTRACTION_WORK_DIR", str(WORKSPACE_ROOT / "extracted_tmp")))
 EXTRACTION_EXECUTION_MODE = os.environ.get("EXTRACTION_EXECUTION_MODE", "eager")  # eager | thread | celery
+EXTRACTION_MAX_ARCHIVE_ENTRIES = int(os.environ.get("EXTRACTION_MAX_ARCHIVE_ENTRIES", "10000"))
+EXTRACTION_MAX_UNCOMPRESSED_BYTES = int(os.environ.get("EXTRACTION_MAX_UNCOMPRESSED_BYTES", str(5 * 1024 * 1024 * 1024)))
+EXTRACTION_MAX_COMPRESSION_RATIO = float(os.environ.get("EXTRACTION_MAX_COMPRESSION_RATIO", "100.0"))
+EXTRACTION_MAX_XML_DEPTH = int(os.environ.get("EXTRACTION_MAX_XML_DEPTH", "64"))
+EXTRACTION_MAX_XML_NODES = int(os.environ.get("EXTRACTION_MAX_XML_NODES", "2000000"))
+EXTRACTION_MAX_PARSE_SECONDS = float(os.environ.get("EXTRACTION_MAX_PARSE_SECONDS", "300.0"))
 
 # Celery & Redis
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_ALWAYS_EAGER = EXTRACTION_EXECUTION_MODE == "eager"
-
-# Windows Connector Ingest Auth
-CONNECTOR_SHARED_TOKEN = os.environ.get("CONNECTOR_SHARED_TOKEN", "")
-CONNECTOR_REQUIRE_TLS = os.environ.get("CONNECTOR_REQUIRE_TLS", "false").lower() == "true"
 
 # AI Provider Settings (strictly independent from extraction_engine)
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "deterministic")

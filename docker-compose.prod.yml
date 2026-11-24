@@ -34,8 +34,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       EXTRACTION_EXECUTION_MODE: celery
-      CONNECTOR_SHARED_TOKEN: ${CONNECTOR_SHARED_TOKEN:?Set CONNECTOR_SHARED_TOKEN}
-      CONNECTOR_REQUIRE_TLS: "true"
+      MAX_UPLOAD_ZIP_BYTES: ${MAX_UPLOAD_ZIP_BYTES:-1073741824}
       ALLOWED_SOURCE_ROOTS: /data/planswift_sources
     volumes:
       - ${PLANSWIFT_SOURCE_DIR:-./sources}:/data/planswift_sources:ro

@@ -83,7 +83,7 @@ def parse_property_element(
         image_data_sha256=image_data_sha256,
         attributes=stored_attrs,
         source_location=source_location,
-        provenance=ProvenanceStatus.ORIGINAL,
+        provenance=ProvenanceStatus.NATIVE,
     )
 
 

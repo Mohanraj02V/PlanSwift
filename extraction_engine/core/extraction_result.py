@@ -1,4 +1,4 @@
-"""Canonical Digital Project Model schemas and provenance definitions."""
+"""Canonical Digital Project Model schemas and standalone provenance definitions."""
 
 from __future__ import annotations
 
@@ -10,16 +10,19 @@ from pydantic import BaseModel, Field
 
 
 class ProvenanceStatus(str, Enum):
-    """Mandatory provenance classification distinguishing native facts from inferences."""
+    """Mandatory provenance classification distinguishing native facts, deterministic calculations, and inferences."""
 
-    ORIGINAL = "original"
-    API_EXTRACTED = "api_extracted"
-    NORMALIZED = "normalized"
-    COMPUTED_BY_PLANSWIFT = "computed_by_planswift"
-    DERIVED = "derived"
-    AI_INFERRED = "ai_inferred"
+    NATIVE = "native"
+    CALCULATED = "calculated"
+    RECONSTRUCTED = "reconstructed"
+    INFERRED = "inferred"
+    AI_GENERATED = "ai_generated"
     UNRESOLVED = "unresolved"
     UNSUPPORTED = "unsupported"
+    # Backward-compatible aliases (normalized at API/UI boundary if present in legacy rows)
+    ORIGINAL = "original"
+    NORMALIZED = "normalized"
+    DERIVED = "derived"
 
 
 class ProvenanceRecord(BaseModel):
@@ -33,7 +36,7 @@ class ProvenanceRecord(BaseModel):
     source_class: str | None = None
     property_name: str | None = None
     status: ProvenanceStatus
-    parser_version: str = "1.0.0"
+    parser_version: str = "2.0.0"
     extraction_run_id: str | None = None
     extracted_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     notes: str | None = None
@@ -65,12 +68,12 @@ class CanonicalProperty(BaseModel):
     image_data_sha256: str | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
     source_location: str | None = None
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
     normalization_provenance: ProvenanceStatus | None = None
 
 
 class CanonicalPoint(BaseModel):
-    """Raw native DigitizerData coordinate point without raster transformation."""
+    """Raw native DigitizerData coordinate point plus optional calibrated coordinates."""
 
     point_order: int
     x: float
@@ -80,16 +83,16 @@ class CanonicalPoint(BaseModel):
     raw_y: str
     normalized_x: float | None = None
     normalized_y: float | None = None
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalGeometry(BaseModel):
-    """Structured native geometry extracted from DigitizerData or COM geometry points."""
+    """Structured native geometry extracted from DigitizerData XML without image processing."""
 
     section_guid: str
     parent_object_guid: str
     page_guid: str | None = None
-    geometry_type: str  # PointCollection, Polyline, Polygon, Segment, MultiPoint, Empty
+    geometry_type: str  # PointCollection, Polyline, Polygon, Segment, MultiPoint, Empty, Invalid
     coordinate_system: str = "planswift_page_digitizer_raw"
     point_count: int = 0
     points: list[CanonicalPoint] = Field(default_factory=list)
@@ -99,9 +102,19 @@ class CanonicalGeometry(BaseModel):
     bbox_max_y: float | None = None
     derived_polyline_length: float | None = None
     derived_polygon_area: float | None = None
+    scale_x: float | None = None
+    scale_y: float | None = None
+    scale_unit: str = ""
+    is_calibrated: bool = False
+    calibrated_length: float | None = None
+    calibrated_area: float | None = None
+    calibrated_unit: str = ""
+    normalized_length_m: float | None = None
+    normalized_area_m2: float | None = None
+    validation_warnings: list[str] = Field(default_factory=list)
     raw_digitizer_xml: str = ""
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
-    derived_metrics_provenance: ProvenanceStatus = ProvenanceStatus.DERIVED
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
+    derived_metrics_provenance: ProvenanceStatus = ProvenanceStatus.RECONSTRUCTED
 
 
 class CanonicalMeasurementSection(BaseModel):
@@ -121,11 +134,11 @@ class CanonicalMeasurementSection(BaseModel):
     derived_quantity: float | None = None
     derived_unit: str | None = None
     geometry: CanonicalGeometry | None = None
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalMeasurement(BaseModel):
-    """Measurement record separating raw formulas from derived and PlanSwift-computed quantities."""
+    """Measurement record strictly separating native stored text from calculated & reconstructed quantities."""
 
     measurement_key: str
     object_guid: str
@@ -135,14 +148,18 @@ class CanonicalMeasurement(BaseModel):
     property_name: str
     raw_formula: str | None = None
     native_stored_value: str | None = None
-    planswift_computed_quantity: float | None = None
+    calculated_quantity: float | None = None
+    reconstructed_quantity: float | None = None
     derived_quantity: float | None = None
     unit: str | None = None
     normalized_quantity: float | None = None
     normalized_unit: str | None = None
     precision: str | None = None
     is_default_template_value: bool = False
-    status: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    calculation_formula: str = ""
+    calculation_inputs: dict[str, Any] = Field(default_factory=dict)
+    provenance_classification: str = "native"
+    status: ProvenanceStatus = ProvenanceStatus.NATIVE
     notes: str | None = None
 
 
@@ -165,7 +182,7 @@ class CanonicalFormulaDependency(BaseModel):
 
 
 class CanonicalFormula(BaseModel):
-    """Statically analyzed PlanSwift formula or expression (never executed with eval)."""
+    """Parsed & safely evaluated PlanSwift formula or expression (never executed with eval)."""
 
     formula_key: str
     object_guid: str
@@ -180,7 +197,11 @@ class CanonicalFormula(BaseModel):
     circular_path: list[str] = Field(default_factory=list)
     unresolved_references: list[str] = Field(default_factory=list)
     evaluation_status: ProvenanceStatus = ProvenanceStatus.UNRESOLVED
-    planswift_evaluated_value: str | None = None
+    calculated_value: str | None = None
+    calculated_numeric: float | None = None
+    calculation_unit: str = ""
+    calculation_reason: str = ""
+    calculation_inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class CanonicalRelationship(BaseModel):
@@ -200,7 +221,7 @@ class CanonicalRelationship(BaseModel):
     target_guid: str
     order_index: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalPage(BaseModel):
@@ -215,6 +236,8 @@ class CanonicalPage(BaseModel):
     tiff_archive_path: str | None = None
     tiff_size_bytes: int | None = None
     scale_units: str | None = None
+    scale_x: float | None = None
+    scale_y: float | None = None
     page_width_raw: str | None = None
     page_height_raw: str | None = None
     numeric_scale_factor: float | None = None
@@ -223,7 +246,7 @@ class CanonicalPage(BaseModel):
     timestamp_raw: str | None = None
     pages_window_expanded: bool | None = None
     section_count: int = 0
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalAssemblyComponent(BaseModel):
@@ -234,9 +257,10 @@ class CanonicalAssemblyComponent(BaseModel):
     name: str
     native_class: str
     quantity_raw: str | None = None
+    calculated_quantity: float | None = None
     unit: str | None = None
     cost_each_raw: str | None = None
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalAssembly(BaseModel):
@@ -247,7 +271,7 @@ class CanonicalAssembly(BaseModel):
     native_class: str
     assembly_type: str | None = None
     components: list[CanonicalAssemblyComponent] = Field(default_factory=list)
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalDenotation(BaseModel):
@@ -259,7 +283,7 @@ class CanonicalDenotation(BaseModel):
     label: str
     value: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalRemark(BaseModel):
@@ -269,7 +293,7 @@ class CanonicalRemark(BaseModel):
     object_guid: str
     field_name: str
     text: str
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
 
 
 class CanonicalObject(BaseModel):
@@ -304,12 +328,16 @@ class CanonicalObject(BaseModel):
     formulas: list[CanonicalFormula] = Field(default_factory=list)
     denotations: list[CanonicalDenotation] = Field(default_factory=list)
     remarks: list[CanonicalRemark] = Field(default_factory=list)
-    provenance: ProvenanceStatus = ProvenanceStatus.ORIGINAL
+    provenance: ProvenanceStatus = ProvenanceStatus.NATIVE
     raw_attributes: dict[str, str] = Field(default_factory=dict)
 
     def get_property(self, name: str) -> CanonicalProperty | None:
+        target = name.lower()
         for prop in self.properties:
             if prop.name == name:
+                return prop
+        for prop in self.properties:
+            if prop.name and prop.name.lower() == target:
                 return prop
         return None
 
@@ -371,6 +399,7 @@ class ValidationSummary(BaseModel):
     geometry_features_extracted: int = 0
     points_extracted: int = 0
     formulas_extracted: int = 0
+    formulas_calculated: int = 0
     unresolved_formulas: int = 0
     circular_formulas: int = 0
     unresolved_references: int = 0
@@ -383,10 +412,13 @@ class ValidationSummary(BaseModel):
 class CanonicalProject(BaseModel):
     """Root Canonical Digital Project Model preserving full PlanSwift source fidelity."""
 
-    schema_version: str = "1.0.0"
+    schema_version: str = "1.0"
+    engine_name: str = "Standalone PlanSwift ZIP Extraction Engine"
+    engine_version: str = "2.0.0"
     source_system: str = "PlanSwift"
     native_guid: str
     name: str
+    native_project_version: str | None = None
     description: str = ""
     notes: str = ""
     project_type: str = "Job"
@@ -403,6 +435,7 @@ class CanonicalProject(BaseModel):
     assemblies: list[CanonicalAssembly] = Field(default_factory=list)
     discovered_classes: dict[str, int] = Field(default_factory=dict)
     unsupported_classes: dict[str, int] = Field(default_factory=dict)
+    unsupported_objects: list[dict[str, Any]] = Field(default_factory=list)
     provenance_records: list[ProvenanceRecord] = Field(default_factory=list)
     deterministic_digest_sha256: str | None = None
 

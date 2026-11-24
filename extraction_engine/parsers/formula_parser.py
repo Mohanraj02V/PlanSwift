@@ -1,4 +1,4 @@
-"""Safe static PlanSwift formula analyzer and dependency cycle detector (NEVER executes eval)."""
+"""Safe static PlanSwift formula analyzer, dependency cycle detector, and safe AST evaluator."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from extraction_engine.core.extraction_result import (
     CanonicalFormula,
     CanonicalFormulaDependency,
     CanonicalObject,
+    CanonicalProject,
     CanonicalProperty,
     ProvenanceStatus,
 )
@@ -39,7 +40,6 @@ def parse_property_formula(
                 resolved=False,
             )
         )
-        # Also detect bracket references inside the PascalScript body safely
         for match in _OUTER_TOKEN_RE.finditer(raw):
             token = f"[{match.group(1)}]"
             dep = _classify_token(token, match.group(1))
@@ -78,10 +78,11 @@ def _classify_token(token: str, inner: str) -> CanonicalFormulaDependency:
             target_property="Takeoff",
             resolved=False,
         )
-    if inner == "..":
+    if inner == ".." or inner.startswith("..\\"):
         return CanonicalFormulaDependency(
             raw_token=token,
             reference_kind="parent_inheritance",
+            target_property=inner[3:] if inner.startswith("..\\") else None,
             resolved=False,
         )
     if inner.startswith("!"):
@@ -123,21 +124,25 @@ def resolve_formula_graph(objects: list[CanonicalObject]) -> None:
 
     for obj in objects:
         obj_key = obj.native_guid.upper()
-        prop_names = {p.name for p in obj.properties if p.name}
+        prop_names_ci = {p.name.lower(): p.name for p in obj.properties if p.name}
         for formula in obj.formulas:
-            node_id = f"{obj_key}::{formula.property_name}"
+            node_id = f"{obj_key}::{formula.property_name.lower()}"
             formula_by_node[node_id] = formula
             edges: list[str] = []
             unresolved_remaining: list[str] = []
 
             for dep in formula.dependencies:
                 if dep.reference_kind == "parent_inheritance" and obj.parent_guid:
-                    parent = obj_by_guid.get(obj.parent_guid.upper())
-                    if parent and parent.get_property(formula.property_name) is not None:
-                        dep.target_object_guid = parent.native_guid
-                        dep.target_property = formula.property_name
+                    target_name = dep.target_property or formula.property_name
+                    cur = obj
+                    hops = dep.raw_token.count("..\\") or 1
+                    for _ in range(hops):
+                        cur = obj_by_guid.get(cur.parent_guid.upper()) if cur and cur.parent_guid else None
+                    if cur and cur.get_property(target_name) is not None:
+                        dep.target_object_guid = cur.native_guid
+                        dep.target_property = target_name
                         dep.resolved = True
-                        edges.append(f"{parent.native_guid.upper()}::{formula.property_name}")
+                        edges.append(f"{cur.native_guid.upper()}::{target_name.lower()}")
                         continue
                 elif dep.reference_kind == "cross_object_guid_path" and dep.target_object_guid:
                     ref_prop = obj.get_property(dep.target_object_guid)
@@ -146,12 +151,12 @@ def resolve_formula_graph(objects: list[CanonicalObject]) -> None:
                     if target_obj and dep.target_property and target_obj.get_property(dep.target_property) is not None:
                         dep.target_object_guid = target_obj.native_guid
                         dep.resolved = True
-                        edges.append(f"{target_obj.native_guid.upper()}::{dep.target_property}")
+                        edges.append(f"{target_obj.native_guid.upper()}::{dep.target_property.lower()}")
                         continue
-                elif dep.reference_kind == "property_reference" and dep.target_property in prop_names:
+                elif dep.reference_kind == "property_reference" and dep.target_property and dep.target_property.lower() in prop_names_ci:
                     dep.target_object_guid = obj.native_guid
                     dep.resolved = True
-                    edges.append(f"{obj_key}::{dep.target_property}")
+                    edges.append(f"{obj_key}::{dep.target_property.lower()}")
                     continue
 
                 unresolved_remaining.append(dep.raw_token)
@@ -160,7 +165,7 @@ def resolve_formula_graph(objects: list[CanonicalObject]) -> None:
             adjacency[node_id] = edges
 
     # DFS cycle detection
-    state: dict[str, int] = {}  # 0=unvisited, 1=visiting, 2=done
+    state: dict[str, int] = {}
 
     def dfs(node: str, stack: list[str]) -> None:
         state[node] = 1
@@ -182,3 +187,11 @@ def resolve_formula_graph(objects: list[CanonicalObject]) -> None:
     for node_id in list(adjacency.keys()):
         if state.get(node_id, 0) == 0:
             dfs(node_id, [])
+
+
+def resolve_and_evaluate_formulas(project: CanonicalProject) -> None:
+    """Build static dependency graph, detect cycles, and run standalone safe AST formula evaluation."""
+    from extraction_engine.formulas.evaluator import evaluate_project_formulas
+
+    resolve_formula_graph(project.objects)
+    evaluate_project_formulas(project)

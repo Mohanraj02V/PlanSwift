@@ -46,12 +46,18 @@ class SourceFileEntry(BaseModel):
 class SourceManifest(BaseModel):
     """Complete read-only source package manifest built before object parsing."""
 
-    manifest_version: str = "1.0.0"
+    manifest_version: str = "2.0.0"
     source_path: str
     source_name: str
     actual_extension: str
     magic_bytes_hex: str
-    container_format: Literal["pkzip_swiftjob", "directory_project", "xml_only", "unknown"]
+    container_format: Literal[
+        "pkzip_swiftjob",
+        "planswift_job_directory",
+        "directory_project",
+        "xml_only",
+        "unknown",
+    ]
     file_size_bytes: int
     source_sha256: str
     total_entries: int
@@ -59,9 +65,15 @@ class SourceManifest(BaseModel):
     total_uncompressed_bytes: int
     xml_entry_path: str | None = None
     xml_entry_size: int = 0
+    detected_xml_encoding: str = ""
+    detected_project_version: str = ""
     raster_entry_count: int = 0
     raster_total_bytes: int = 0
     duplicate_crc_groups: dict[str, list[str]] = Field(default_factory=dict)
+    duplicate_paths: list[str] = Field(default_factory=list)
+    missing_referenced_files: list[str] = Field(default_factory=list)
+    corrupted_entries: list[str] = Field(default_factory=list)
     suspicious_entries: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     entries: list[SourceFileEntry] = Field(default_factory=list)
     inspected_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
