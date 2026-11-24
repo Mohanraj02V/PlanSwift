@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.measurements",
     "apps.geometry",
     "apps.formulas",
+    "apps.cad_bim",
     "apps.classifications",
     "apps.dimensions",
     "apps.annotations",
@@ -160,6 +161,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
+        "apps.permissions.rbac.IsEstimationRoleScoped",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
@@ -185,6 +187,7 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
@@ -225,6 +228,13 @@ EXTRACTION_MAX_COMPRESSION_RATIO = float(os.environ.get("EXTRACTION_MAX_COMPRESS
 EXTRACTION_MAX_XML_DEPTH = int(os.environ.get("EXTRACTION_MAX_XML_DEPTH", "64"))
 EXTRACTION_MAX_XML_NODES = int(os.environ.get("EXTRACTION_MAX_XML_NODES", "2000000"))
 EXTRACTION_MAX_PARSE_SECONDS = float(os.environ.get("EXTRACTION_MAX_PARSE_SECONDS", "300.0"))
+MAX_UPLOAD_DXF_BYTES = int(os.environ.get("MAX_UPLOAD_DXF_BYTES", str(512 * 1024 * 1024)))
+MAX_UPLOAD_IFC_BYTES = int(os.environ.get("MAX_UPLOAD_IFC_BYTES", str(1024 * 1024 * 1024)))
+DXF_MAX_ENTITIES = int(os.environ.get("DXF_MAX_ENTITIES", "500000"))
+DXF_MAX_BLOCK_DEPTH = int(os.environ.get("DXF_MAX_BLOCK_DEPTH", "32"))
+IFC_EXTRACT_GEOMETRY_DEFAULT = os.environ.get("IFC_EXTRACT_GEOMETRY_DEFAULT", "false").lower() == "true"
+IFC_GEOMETRY_THREADS = max(1, min(int(os.environ.get("IFC_GEOMETRY_THREADS", "2")), 4))
+IFC_GEOMETRY_TIMEOUT_SECONDS = float(os.environ.get("IFC_GEOMETRY_TIMEOUT_SECONDS", "120.0"))
 
 # Celery & Redis
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")

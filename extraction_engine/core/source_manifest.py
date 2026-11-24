@@ -56,6 +56,9 @@ class SourceManifest(BaseModel):
         "planswift_job_directory",
         "directory_project",
         "xml_only",
+        "dxf_ascii",
+        "dxf_binary",
+        "ifc_step",
         "unknown",
     ]
     file_size_bytes: int

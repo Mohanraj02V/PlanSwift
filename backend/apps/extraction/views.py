@@ -46,7 +46,9 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
             "deterministic_digest_sha256",
             "duration_seconds",
             "peak_memory_mb",
+            "peak_rss_mb",
             "cancel_requested",
+            "extraction_options",
             "summary",
             "started_at",
             "finished_at",
@@ -66,7 +68,9 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
             "deterministic_digest_sha256",
             "duration_seconds",
             "peak_memory_mb",
+            "peak_rss_mb",
             "cancel_requested",
+            "extraction_options",
             "summary",
             "started_at",
             "finished_at",
@@ -115,11 +119,17 @@ class ExtractionRunViewSet(viewsets.ModelViewSet):
         if not source:
             return Response({"detail": "No registered ProjectSource found for project."}, status=status.HTTP_400_BAD_REQUEST)
 
+        raw_opts = request.data.get("extraction_options")
+        ext_opts = raw_opts if isinstance(raw_opts, dict) else {}
+        if "extract_geometry" in request.data:
+            ext_opts["ifc_extract_geometry"] = str(request.data.get("extract_geometry")).strip().lower() in ("true", "1", "yes")
+
         run = ExtractionRun.objects.create(
             project=project,
             project_source=source,
             triggered_by=request.user,
             status=ExtractionRun.Status.PENDING,
+            extraction_options=ext_opts,
         )
         log_audit_event(
             action="extraction.started",

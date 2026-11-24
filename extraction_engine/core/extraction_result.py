@@ -216,6 +216,21 @@ class CanonicalRelationship(BaseModel):
         "assembly_component",
         "swift_excel_link",
         "cross_reference",
+        "layer_member",
+        "block_member",
+        "block_insert",
+        "layout_member",
+        "owner_child",
+        "xref_reference",
+        "ifc_aggregates",
+        "ifc_contained_in_spatial_structure",
+        "ifc_defines_by_properties",
+        "ifc_defines_by_type",
+        "ifc_associates_material",
+        "ifc_associates_classification",
+        "ifc_voids_element",
+        "ifc_fills_element",
+        "ifc_connects_elements",
     ]
     source_guid: str
     target_guid: str
@@ -438,6 +453,7 @@ class CanonicalProject(BaseModel):
     unsupported_objects: list[dict[str, Any]] = Field(default_factory=list)
     provenance_records: list[ProvenanceRecord] = Field(default_factory=list)
     deterministic_digest_sha256: str | None = None
+    cad_document: Any = None
 
 
 class ExtractionReport(BaseModel):
@@ -451,6 +467,8 @@ class ExtractionReport(BaseModel):
     finished_at: str
     duration_seconds: float
     peak_memory_mb: float = 0.0
+    peak_rss_mb: float = 0.0
+    stage_timings: dict[str, float] = Field(default_factory=dict)
     project_guid: str | None = None
     project_name: str | None = None
     validation: ValidationSummary | None = None

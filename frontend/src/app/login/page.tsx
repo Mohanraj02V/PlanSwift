@@ -6,6 +6,7 @@ import { loginSchema, registerSchema } from "@/schemas/auth";
 import { apiRequest } from "@/services/api-client/client";
 import { setAuthTokens } from "@/services/authentication/auth";
 import { useProjectContext } from "@/hooks/useProjectContext";
+import type { UserProfile } from "@/types/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,6 +14,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
   const [jobTitle, setJobTitle] = useState("");
   const [error, setError] = useState("");
@@ -38,13 +40,18 @@ export default function LoginPage() {
         }
       }
 
-      const tokens = await apiRequest<{ access: string; refresh: string }>("/auth/login/", {
+      const tokens = await apiRequest<{ access: string; refresh: string; user?: UserProfile }>("/auth/login/", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       setAuthTokens(tokens.access, tokens.refresh);
       await refreshContext();
-      router.push("/dashboard");
+
+      if (tokens.user?.primary_role === "estimation_only") {
+        router.push("/estimation");
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed.");
     } finally {
@@ -55,13 +62,20 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-900 p-4">
       <div className="w-full max-w-md rounded-xl border border-slate-800 bg-white p-6 shadow-xl">
-        <div className="mb-5">
-          <div className="text-xs font-semibold uppercase tracking-wider text-blue-600">Vortexen Estimator</div>
-          <h1 className="mt-1 text-xl font-bold text-slate-900">
-            {mode === "login" ? "Sign in to PlanSwift Platform" : "Create Estimator Account"}
+        <div className="mb-5 border-b border-slate-100 pb-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-widest text-blue-700">
+              VORTEXEN DYNAMICS
+            </span>
+            <span className="rounded bg-blue-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-blue-700">
+              JWT + RBAC
+            </span>
+          </div>
+          <h1 className="mt-1.5 text-xl font-bold text-slate-900">
+            {mode === "login" ? "Sign in to Vortexen Estimator" : "Create Estimator Account"}
           </h1>
           <p className="mt-1 text-xs text-slate-500">
-            Native PlanSwift XML &amp; COM digital project intelligence (zero raster guessing).
+            PlanSwift, DXF &amp; IFC digital extraction, deterministic estimation, and audited commercial quotations.
           </p>
         </div>
 
@@ -110,6 +124,7 @@ export default function LoginPage() {
             <input
               id="email"
               type="email"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -118,12 +133,22 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-xs font-medium text-slate-700">
-              Password
-            </label>
+            <div className="flex items-center justify-between">
+              <label htmlFor="password" className="block text-xs font-medium text-slate-700">
+                Password
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="text-[11px] font-medium text-blue-600 hover:underline"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
             <input
               id="password"
-              type="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"

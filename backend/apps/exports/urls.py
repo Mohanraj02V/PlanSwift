@@ -12,6 +12,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit_logs.services import log_audit_event
+from apps.cad_bim.models import CADDocument
+from apps.cad_bim.views import (
+    BIMElementSerializer,
+    CADBlockSerializer,
+    CADDocumentSerializer,
+    CADEntitySerializer,
+    CADLayerSerializer,
+)
 from apps.exports.models import ExportJob
 from apps.formulas.models import Formula
 from apps.geometry.models import GeometryFeature
@@ -65,6 +73,7 @@ class ProjectExportView(APIView):
             rels = list(ObjectRelationship.objects.filter(project_version=version))
             formulas = list(Formula.objects.filter(project_version=version).select_related("project_object"))
             val = ValidationResult.objects.filter(project_version=version).order_by("-created_at").first()
+            cad_doc = CADDocument.objects.filter(project_version=version).first()
 
             unsupported_objs = [
                 {
@@ -238,8 +247,21 @@ class ProjectExportView(APIView):
                     for r in rels
                 ],
                 "validation": val.checks_json if val else [],
+                **(
+                    {
+                        "cad_document": {
+                            **CADDocumentSerializer(cad_doc).data,
+                            "layers": CADLayerSerializer(cad_doc.layers.all(), many=True).data,
+                            "blocks": CADBlockSerializer(cad_doc.blocks.all(), many=True).data,
+                            "cad_entities": CADEntitySerializer(cad_doc.entities.all(), many=True).data,
+                            "ifc_elements": BIMElementSerializer(cad_doc.bim_elements.all(), many=True).data,
+                        }
+                    }
+                    if cad_doc is not None
+                    else {}
+                ),
             }
-            resp = HttpResponse(json.dumps(payload, indent=2, ensure_ascii=False), content_type="application/json; charset=utf-8")
+            resp = HttpResponse(json.dumps(payload, indent=2, ensure_ascii=False, default=str), content_type="application/json; charset=utf-8")
             resp["Content-Disposition"] = f'attachment; filename="{project.name}_canonical.json"'
             return resp
 

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from apps.assemblies.models import Assembly
 from apps.audit_logs.services import log_audit_event
+from apps.cad_bim.models import BIMElement, CADBlock, CADDocument, CADEntity, CADLayer
 from apps.classifications.models import ObjectClassification
 from apps.components.models import AssemblyComponent
 from apps.denotations.models import Denotation
@@ -43,11 +44,14 @@ class ExtractionOrchestrationService:
     """Runs standalone ExtractionPipeline on a registered/uploaded ProjectSource and persists canonical records."""
 
     @staticmethod
-    def _build_engine_config() -> ExtractionConfig:
+    def _build_engine_config(extraction_options: dict[str, Any] | None = None) -> ExtractionConfig:
+        opts = extraction_options or {}
         allowed_roots = tuple(Path(r) for r in settings.ALLOWED_SOURCE_ROOTS) + (
             Path(settings.EXTRACTION_WORK_DIR).resolve(),
         )
         checkpoint_dir = Path(settings.EXTRACTION_WORK_DIR) / "checkpoints"
+        default_threads = int(getattr(settings, "IFC_GEOMETRY_THREADS", 2))
+        req_threads = int(opts.get("ifc_geometry_threads", default_threads))
         return ExtractionConfig(
             allowed_source_roots=allowed_roots,
             work_dir=Path(settings.EXTRACTION_WORK_DIR),
@@ -59,6 +63,13 @@ class ExtractionOrchestrationService:
             max_xml_depth=int(getattr(settings, "EXTRACTION_MAX_XML_DEPTH", 64)),
             max_xml_nodes=int(getattr(settings, "EXTRACTION_MAX_XML_NODES", 2_000_000)),
             max_parse_seconds=float(getattr(settings, "EXTRACTION_MAX_PARSE_SECONDS", 300.0)),
+            dxf_max_file_bytes=int(getattr(settings, "MAX_UPLOAD_DXF_BYTES", 512 * 1024 * 1024)),
+            dxf_max_entities=int(getattr(settings, "DXF_MAX_ENTITIES", 500_000)),
+            dxf_max_block_depth=int(getattr(settings, "DXF_MAX_BLOCK_DEPTH", 32)),
+            ifc_max_file_bytes=int(getattr(settings, "MAX_UPLOAD_IFC_BYTES", 1024 * 1024 * 1024)),
+            ifc_extract_geometry=bool(opts.get("ifc_extract_geometry", getattr(settings, "IFC_EXTRACT_GEOMETRY_DEFAULT", False))),
+            ifc_geometry_threads=max(1, min(req_threads, 4)),
+            ifc_geometry_timeout_seconds=float(getattr(settings, "IFC_GEOMETRY_TIMEOUT_SECONDS", 120.0)),
         )
 
     @staticmethod
@@ -81,7 +92,7 @@ class ExtractionOrchestrationService:
         run.save(update_fields=["started_at", "status", "progress_pct"])
 
         cancel_evt = threading.Event()
-        cfg = ExtractionOrchestrationService._build_engine_config()
+        cfg = ExtractionOrchestrationService._build_engine_config(run.extraction_options)
 
         def on_progress(stage: ExtractionStage, pct: int, message: str) -> None:
             run.refresh_from_db(fields=["cancel_requested"])
@@ -145,8 +156,11 @@ class ExtractionOrchestrationService:
         run.deterministic_digest_sha256 = canonical_project.deterministic_digest_sha256 or ""
         run.duration_seconds = report.duration_seconds
         run.peak_memory_mb = report.peak_memory_mb
+        run.peak_rss_mb = getattr(report, "peak_rss_mb", 0.0)
         run.finished_at = timezone.now()
+        cad_doc = getattr(canonical_project, "cad_document", None)
         run.summary = {
+            "source_system": canonical_project.source_system,
             "objects_extracted": len(canonical_project.objects),
             "pages_extracted": len(canonical_project.pages),
             "relationships_extracted": len(canonical_project.relationships),
@@ -154,6 +168,18 @@ class ExtractionOrchestrationService:
             "unsupported_objects_count": len(canonical_project.unsupported_objects),
             "formulas_calculated": report.validation.formulas_calculated if report.validation else 0,
             "validation_accuracy_pct": report.validation.overall_verified_accuracy_pct if report.validation else None,
+            **(
+                {
+                    "cad_source_format": cad_doc.source_format,
+                    "entities_extracted": len(cad_doc.cad_entities),
+                    "layers_extracted": len(cad_doc.layers),
+                    "blocks_extracted": len(cad_doc.blocks),
+                    "ifc_elements_extracted": len(cad_doc.ifc_elements),
+                    "stage_timings": report.stage_timings,
+                }
+                if cad_doc is not None
+                else {}
+            ),
         }
         run.save()
 
@@ -193,6 +219,7 @@ class ExtractionOrchestrationService:
         project.description = canonical_project.description
         project.notes = canonical_project.notes
         project.project_type = canonical_project.project_type
+        project.source_format = canonical_project.source_system.lower()
         project.native_project_version = canonical_project.native_project_version or ""
         project.measurement_system = canonical_project.measurement_system
         project.excel_workbook_connected = canonical_project.excel_workbook_connected
@@ -200,7 +227,10 @@ class ExtractionOrchestrationService:
         project.native_timestamp_raw = canonical_project.timestamp_raw
         project.save()
 
-        # Idempotency check: reuse existing version with same source+digest+engine_version
+        cad_doc = getattr(canonical_project, "cad_document", None)
+        ext_opts_key = cad_doc.extraction_options if cad_doc is not None else {}
+
+        # Idempotency check: reuse existing version with same source+digest+engine_version+options
         existing_version = (
             ProjectVersion.objects.filter(
                 project=project,
@@ -214,6 +244,7 @@ class ExtractionOrchestrationService:
             existing_version is not None
             and existing_version.project_objects.count() == len(canonical_project.objects)
             and existing_version.metadata.get("engine_version") == canonical_project.engine_version
+            and existing_version.metadata.get("extraction_options", {}) == ext_opts_key
         ):
             ProjectVersion.objects.filter(project=project).exclude(id=existing_version.id).update(is_current=False)
             if not existing_version.is_current:
@@ -238,6 +269,7 @@ class ExtractionOrchestrationService:
                 "discovered_classes": canonical_project.discovered_classes,
                 "unsupported_classes": canonical_project.unsupported_classes,
                 "engine_version": canonical_project.engine_version,
+                "extraction_options": ext_opts_key,
             }
             version.save(update_fields=["source_sha256", "deterministic_digest_sha256", "is_current", "metadata"])
         else:
@@ -253,6 +285,7 @@ class ExtractionOrchestrationService:
                     "discovered_classes": canonical_project.discovered_classes,
                     "unsupported_classes": canonical_project.unsupported_classes,
                     "engine_version": canonical_project.engine_version,
+                    "extraction_options": ext_opts_key,
                 },
             )
 
@@ -701,6 +734,139 @@ class ExtractionOrchestrationService:
             ],
             batch_size=1000,
         )
+
+        if cad_doc is not None:
+            header_meta = dict(cad_doc.header_variables or {})
+            header_meta["_source_name"] = source.source_name
+            db_cad_doc = CADDocument.objects.create(
+                project_version=version,
+                source_format=cad_doc.source_format,
+                library_name=cad_doc.library_name,
+                library_version=cad_doc.library_version,
+                file_version=cad_doc.file_version,
+                schema_name=cad_doc.schema_name,
+                source_units=cad_doc.source_units,
+                unit_to_meter_factor=cad_doc.unit_to_meter_factor,
+                entity_count=len(cad_doc.cad_entities),
+                layer_count=len(cad_doc.layers),
+                block_count=len(cad_doc.blocks),
+                ifc_element_count=len(cad_doc.ifc_elements),
+                unsupported_count=len(canonical_project.unsupported_objects),
+                header_metadata_json=header_meta,
+                external_references_json=cad_doc.external_references,
+                extraction_options_json=cad_doc.extraction_options,
+                stage_timings_json=cad_doc.stage_timings,
+                peak_rss_mb=cad_doc.peak_rss_mb,
+            )
+            if cad_doc.layers:
+                CADLayer.objects.bulk_create(
+                    [
+                        CADLayer(
+                            cad_document=db_cad_doc,
+                            layer_id=lyr.layer_id,
+                            name=lyr.name,
+                            color=lyr.color,
+                            true_color=lyr.true_color,
+                            linetype=lyr.linetype,
+                            lineweight=lyr.lineweight,
+                            is_on=lyr.is_on,
+                            is_frozen=lyr.is_frozen,
+                            is_locked=lyr.is_locked,
+                            is_plottable=lyr.is_plottable,
+                            entity_count=lyr.entity_count,
+                            raw_attributes_json=lyr.raw_attributes,
+                            provenance=lyr.provenance.value,
+                        )
+                        for lyr in cad_doc.layers
+                    ],
+                    batch_size=500,
+                )
+            if cad_doc.blocks:
+                CADBlock.objects.bulk_create(
+                    [
+                        CADBlock(
+                            cad_document=db_cad_doc,
+                            block_id=blk.block_id,
+                            name=blk.name,
+                            base_point_json=blk.base_point,
+                            is_layout=blk.is_layout,
+                            is_anonymous=blk.is_anonymous,
+                            is_xref=blk.is_xref,
+                            xref_path=blk.xref_path,
+                            entity_count=blk.entity_count,
+                            nested_blocks_json=blk.nested_block_names,
+                            raw_attributes_json=blk.raw_attributes,
+                            provenance=blk.provenance.value,
+                        )
+                        for blk in cad_doc.blocks
+                    ],
+                    batch_size=500,
+                )
+            if cad_doc.cad_entities:
+                CADEntity.objects.bulk_create(
+                    [
+                        CADEntity(
+                            cad_document=db_cad_doc,
+                            entity_key=ent.entity_key,
+                            handle=ent.handle,
+                            entity_type=ent.entity_type,
+                            owner_handle=ent.owner_handle,
+                            layer_name=ent.layer,
+                            layout_name=ent.layout_name,
+                            block_name=ent.block_name,
+                            linetype=ent.linetype,
+                            color=ent.color,
+                            true_color=ent.true_color,
+                            lineweight=ent.lineweight,
+                            invisible=ent.invisible,
+                            ocs_applied=ent.ocs_applied,
+                            is_supported=ent.is_supported,
+                            native_coordinates_json=ent.native_coordinates,
+                            world_coordinates_json=ent.world_coordinates,
+                            geometry_metrics_json=ent.geometry_metrics,
+                            dimension_data_json=ent.dimension_data,
+                            classification_json=ent.classification.model_dump(mode="json"),
+                            attributes_json=ent.attributes,
+                            warnings_json=ent.warnings,
+                            raw_metadata_json=ent.raw_metadata,
+                            provenance=ent.provenance.value,
+                        )
+                        for ent in cad_doc.cad_entities
+                    ],
+                    batch_size=500,
+                )
+            if cad_doc.ifc_elements:
+                BIMElement.objects.bulk_create(
+                    [
+                        BIMElement(
+                            cad_document=db_cad_doc,
+                            global_id=el.global_id,
+                            step_id=el.step_id,
+                            ifc_class=el.ifc_class,
+                            name=el.name,
+                            description=el.description,
+                            object_type=el.object_type,
+                            predefined_type=el.predefined_type,
+                            tag=el.tag,
+                            spatial_parent_guid=el.spatial_parent_guid,
+                            storey_name=el.storey_name,
+                            placement_json={
+                                "matrix": el.placement_matrix,
+                                "world_origin": el.world_origin,
+                            },
+                            property_sets_json=[ps.model_dump(mode="json") for ps in el.property_sets],
+                            quantity_sets_json=[qs.model_dump(mode="json") for qs in el.quantity_sets],
+                            materials_json=el.materials,
+                            classifications_json=el.classifications,
+                            representations_json=el.representations,
+                            geometry_summary_json=el.geometry_summary.model_dump(mode="json"),
+                            warnings_json=el.warnings,
+                            provenance=el.provenance.value,
+                        )
+                        for el in cad_doc.ifc_elements
+                    ],
+                    batch_size=500,
+                )
 
         ExtractionOrchestrationService._persist_validation_and_reconciliation(version=version, run=run, report=report)
         return version

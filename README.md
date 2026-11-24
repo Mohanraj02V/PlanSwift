@@ -57,3 +57,34 @@ Open `http://localhost:3000` and sign in with the seeded dev account (`estimator
 - [TESTING.md](TESTING.md) — Automated unit, integration, golden dataset & E2E verification
 - [DEPLOYMENT.md](DEPLOYMENT.md) — Docker Compose, PostgreSQL/PostGIS, Celery/Redis, Nginx TLS
 - [EXTRACTION_LIMITATIONS.md](EXTRACTION_LIMITATIONS.md) — Explicit unverified/unresolved boundaries
+
+---
+
+## CAD & BIM Extensions (DXF via `ezdxf` & IFC via `IfcOpenShell`)
+
+In addition to PlanSwift `.SwiftJob` / `XMLData.XML`, Vortexen Estimator includes independent, zero-raster adapters for:
+- **DXF (`ezdxf 1.4.5`, Cython-accelerated)**: ASCII & Binary DXF (`R12`–`R2018`), layer tables, block definitions, nested `INSERT` `Matrix44` transforms, OCS-to-WCS math, double-precision bulge/curve metrics, dimension override separation (`actual_measurement` vs `geometry_measured` vs `text_override`), `$INSUNITS` preservation, XREF isolation, and unsupported entity preservation.
+- **IFC (`IfcOpenShell 0.9.0.post1`)**: `IFC2X3`, `IFC4`, and `IFC4X3_ADD2` STEP models, spatial hierarchy, `IfcPropertySet` (direct & inherited), native `IfcElementQuantity` (`Qto_*`) kept strictly separate from opt-in 3D tessellation metrics (`--extract-geometry` / `extract_geometry=true`, bounded `ifcopenshell.geom.iterator`).
+
+### CLI & Benchmark Commands
+
+```powershell
+# Inspect format, manifest, or validate / export DXF or IFC
+.\backend\.venv\Scripts\python.exe -m extraction_engine.cli validate --source path\to\model.ifc --extract-geometry --ifc-threads 2
+.\backend\.venv\Scripts\python.exe -m extraction_engine.cli export --source path\to\drawing.dxf --out-dir .\out_dxf
+
+# Run reproducible DXF, IFC & PlanSwift benchmarks
+.\backend\.venv\Scripts\python.exe extraction_engine\benchmarks\run_benchmarks.py
+```
+
+### CAD / BIM REST API & Frontend
+- Upload `.dxf` / `.ifc` sources via `POST /api/v1/project-sources/upload/` (`extract_geometry` flag supported for IFC) and explore extracted layers, blocks, entities, IFC elements, property sets, `Qto_*` quantities, and 3D summaries under **`/cad-bim`** (`GET /api/v1/cad-bim/{documents,layers,blocks,entities,elements}/` and `GET /api/v1/exports/<project_id>/`).
+
+### CAD / BIM Documentation Index
+- [CAD_ARCHITECTURE.md](CAD_ARCHITECTURE.md) — Three-path isolation architecture, format detection, concurrency bounds
+- [DXF_EXTRACTION.md](DXF_EXTRACTION.md) — `ezdxf` pipeline, blocks/OCS/bulges/dimensions/XREFs, `iterdxf` evaluation
+- [IFC_EXTRACTION.md](IFC_EXTRACTION.md) — `IfcOpenShell` schemas, `Qto_*` vs 3D geometry separation, bounded iterator
+- [CAD_DATA_MODEL.md](CAD_DATA_MODEL.md) — Additive canonical Pydantic models, Django tables, and REST APIs
+- [CAD_ACCURACY_AND_VALIDATION.md](CAD_ACCURACY_AND_VALIDATION.md) — Provenance rules, validator scorecards, and test coverage
+- [CAD_PERFORMANCE_REPORT.md](CAD_PERFORMANCE_REPORT.md) — Reproducible benchmarks, RSS/heap memory, before/after speedups
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — Exact dependency versions, licenses, and LGPL-3.0 notices

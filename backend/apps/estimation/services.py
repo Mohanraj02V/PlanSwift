@@ -32,6 +32,7 @@ def generate_estimation_session(project: Project, user, session_name: str = "") 
             is_measurement_section=False,
             depth__gte=2,
         )
+        .exclude(native_class__iexact="Folder")
         .prefetch_related("measurements", "child_sections")
         .order_by("native_class", "name")
     )

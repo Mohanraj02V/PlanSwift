@@ -11,6 +11,9 @@ dependencies = [
     "pydantic>=2.9.0",
     "lxml>=5.3.0",
     "openpyxl>=3.1.5",
+    "ezdxf>=1.4.0,<2.0",
+    "ifcopenshell>=0.8.0,<1.0",
+    "psutil>=6.0.0,<8.0",
 ]
 
 [tool.setuptools.packages.find]

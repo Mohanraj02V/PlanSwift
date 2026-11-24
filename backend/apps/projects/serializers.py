@@ -58,6 +58,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "description",
             "notes",
             "project_type",
+            "source_format",
             "measurement_system",
             "excel_workbook_connected",
             "xml_encoding",

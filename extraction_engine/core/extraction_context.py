@@ -84,6 +84,19 @@ class ExtractionConfig:
     )
     parser_version: str = "2.0.0"
     hash_chunk_size: int = 4 * 1024 * 1024  # 4 MiB streaming chunks
+    # DXF (ezdxf) bounds & options
+    dxf_max_file_bytes: int = 512 * 1024 * 1024  # 512 MiB
+    dxf_max_block_depth: int = 32
+    dxf_max_entities: int = 500_000
+    dxf_resolve_inserts: bool = True
+    dxf_enable_rule_classification: bool = True
+    # IFC (IfcOpenShell) bounds & options
+    ifc_max_file_bytes: int = 1024 * 1024 * 1024  # 1 GiB
+    ifc_extract_geometry: bool = False  # Property/quantity-only default; opt-in 3D geometry iterator
+    ifc_geometry_threads: int = 2  # Hard-bounded 1..4 to avoid Celery nested oversubscription
+    ifc_geometry_timeout_seconds: float = 120.0
+    ifc_max_elements: int = 500_000
+    ifc_max_rel_depth: int = 64
 
 
 ProgressCallback = Callable[[ExtractionStage, int, str], None]

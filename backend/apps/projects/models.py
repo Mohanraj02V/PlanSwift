@@ -17,6 +17,7 @@ class Project(models.Model):
     description = models.TextField(blank=True)
     notes = models.TextField(blank=True)
     project_type = models.CharField(max_length=64, default="Job")
+    source_format = models.CharField(max_length=32, default="planswift", db_index=True)
     native_project_version = models.CharField(max_length=128, blank=True, default="")
     measurement_system = models.CharField(max_length=64, blank=True)
     excel_workbook_connected = models.BooleanField(null=True, blank=True)

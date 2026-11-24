@@ -17,4 +17,5 @@ class Assembly(models.Model):
 
     class Meta:
         db_table = "assemblies"
+        ordering = ["name"]
         unique_together = [("project_version", "native_guid")]

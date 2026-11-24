@@ -37,6 +37,7 @@ urlpatterns = [
     path("api/v1/measurements/", include("apps.measurements.urls")),
     path("api/v1/geometry/", include("apps.geometry.urls")),
     path("api/v1/formulas/", include("apps.formulas.urls")),
+    path("api/v1/cad-bim/", include("apps.cad_bim.urls")),
     path("api/v1/classifications/", include("apps.classifications.urls")),
     path("api/v1/assemblies/", include("apps.assemblies.urls")),
     path("api/v1/components/", include("apps.components.urls")),

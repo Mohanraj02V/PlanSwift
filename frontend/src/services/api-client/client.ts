@@ -14,28 +14,38 @@ export class ApiClientError extends Error {
   }
 }
 
+let inflightRefreshPromise: Promise<string | null> | null = null;
+
 async function tryRefreshAccessToken(): Promise<string | null> {
+  if (inflightRefreshPromise) {
+    return inflightRefreshPromise;
+  }
   const refresh = getRefreshToken();
   if (!refresh) return null;
-  try {
-    const resp = await fetch(`${API_BASE_URL}/auth/refresh/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh }),
-    });
-    if (!resp.ok) {
-      clearAuthTokens();
+  inflightRefreshPromise = (async () => {
+    try {
+      const resp = await fetch(`${API_BASE_URL}/auth/refresh/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh }),
+      });
+      if (!resp.ok) {
+        clearAuthTokens();
+        return null;
+      }
+      const data = await resp.json();
+      if (data.access) {
+        setAuthTokens(data.access, data.refresh);
+        return data.access as string;
+      }
       return null;
+    } catch {
+      return null;
+    } finally {
+      inflightRefreshPromise = null;
     }
-    const data = await resp.json();
-    if (data.access) {
-      setAuthTokens(data.access, data.refresh);
-      return data.access as string;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  })();
+  return inflightRefreshPromise;
 }
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}, retryOn401 = true): Promise<T> {
@@ -89,16 +99,52 @@ export async function downloadExportFile(projectId: string, exportFormat: string
   return resp.blob();
 }
 
+export async function downloadEstimationDocument(
+  sessionId: string,
+  kind: "excel" | "pdf",
+  quotationOverride?: Record<string, unknown>
+): Promise<Blob> {
+  const action = kind === "excel" ? "export-excel" : "export-pdf";
+  const performFetch = (token: string | null) =>
+    fetch(`${API_BASE_URL}/estimation/sessions/${sessionId}/${action}/`, {
+      method: quotationOverride ? "POST" : "GET",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(quotationOverride ? { "Content-Type": "application/json" } : {}),
+      },
+      body: quotationOverride ? JSON.stringify({ quotation: quotationOverride }) : undefined,
+    });
+
+  let resp = await performFetch(getAccessToken());
+  if (resp.status === 401) {
+    const newAccess = await tryRefreshAccessToken();
+    if (newAccess) {
+      resp = await performFetch(newAccess);
+    }
+  }
+  if (!resp.ok) {
+    throw new ApiClientError(`Quotation ${kind.toUpperCase()} download failed (${resp.status})`, resp.status);
+  }
+  return resp.blob();
+}
+
 export interface ZipUploadResult {
   source: import("@/types/api").ProjectSource;
   extraction_run: import("@/types/api").ExtractionRun | null;
+  bundle?: boolean;
+  bundle_name?: string;
+  processed_count?: number;
+  skipped_files?: Array<{ name: string; reason: string }>;
+  sources?: import("@/types/api").ProjectSource[];
+  extraction_runs?: import("@/types/api").ExtractionRun[];
 }
 
 export function uploadProjectZipWithProgress(
   projectId: string,
   file: File,
   autoExtract: boolean,
-  onProgress: (pct: number) => void
+  onProgress: (pct: number) => void,
+  extractGeometry = false
 ): Promise<ZipUploadResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -129,6 +175,7 @@ export function uploadProjectZipWithProgress(
     const form = new FormData();
     form.append("project", projectId);
     form.append("auto_extract", autoExtract ? "true" : "false");
+    form.append("extract_geometry", extractGeometry ? "true" : "false");
     form.append("file", file);
     xhr.send(form);
   });

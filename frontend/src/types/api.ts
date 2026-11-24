@@ -13,13 +13,26 @@ export type ProvenanceStatus =
   | "derived"
   | "ai_inferred";
 
+export interface UserMembership {
+  organization_id: string;
+  organization_name: string;
+  role: string;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
   full_name: string;
   job_title: string;
+  is_staff?: boolean;
+  is_superuser?: boolean;
+  is_admin?: boolean;
+  primary_role?: string;
+  allowed_pages?: string[];
+  memberships?: UserMembership[];
   mfa_enabled: boolean;
   is_active: boolean;
+  last_login?: string | null;
   created_at: string;
 }
 
@@ -51,6 +64,7 @@ export interface Project {
   description: string;
   notes: string;
   project_type: string;
+  source_format?: string;
   native_project_version?: string;
   measurement_system: string;
   excel_workbook_connected: boolean | null;
@@ -67,6 +81,7 @@ export interface ProjectSource {
   id: string;
   project: string;
   source_kind: string;
+  source_format?: string;
   source_name: string;
   actual_extension: string;
   magic_bytes_hex: string;
@@ -100,7 +115,9 @@ export interface ExtractionRun {
   deterministic_digest_sha256: string;
   duration_seconds: number;
   peak_memory_mb: number;
+  peak_rss_mb?: number;
   cancel_requested: boolean;
+  extraction_options?: Record<string, unknown>;
   summary: Record<string, unknown>;
   started_at: string | null;
   finished_at: string | null;
@@ -314,27 +331,75 @@ export interface ValidationResult {
   created_at: string;
 }
 
+export interface QuotationMetadata {
+  date?: string;
+  reference?: string;
+  to_client?: string;
+  contact_person?: string;
+  contact_number?: string;
+  project_location?: string;
+  subject?: string;
+  intro_text?: string;
+  contract_period?: string;
+  currency?: string;
+  rate_column_label?: string;
+  vat_percent?: number;
+  general_notes?: string[];
+  payment_terms?: string[];
+  validity?: string;
+  scope_includes?: string[];
+  exclusions?: string[];
+  terms_conditions?: string[];
+  closing_note?: string;
+  signatory_name?: string;
+  signatory_title?: string;
+  signatory_phone?: string;
+}
+
+export interface EstimationResultRow {
+  id: string;
+  object_guid: string;
+  object_name: string;
+  native_class: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  unit_cost?: number | null;
+  total_cost?: number | null;
+  source_status: ProvenanceStatus;
+  formula_raw: string;
+  section_count: number;
+  notes: string;
+}
+
 export interface EstimationSession {
   id: string;
   project: string;
   name: string;
   status: string;
   summary_json: Record<string, unknown>;
+  quotation_defaults?: QuotationMetadata;
   approved_at: string | null;
   created_at: string;
-  results: Array<{
-    id: string;
-    object_guid: string;
-    object_name: string;
-    native_class: string;
-    category: string;
-    quantity: number;
-    unit: string;
-    source_status: ProvenanceStatus;
-    formula_raw: string;
-    section_count: number;
-    notes: string;
-  }>;
+  results: EstimationResultRow[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  organization: string | null;
+  organization_name: string | null;
+  actor: string | null;
+  actor_email: string | null;
+  actor_name: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  ip_address: string | null;
+  user_agent: string;
+  metadata: Record<string, unknown>;
+  date: string;
+  time: string;
+  created_at: string;
 }
 
 export interface AISourceObject {
@@ -364,4 +429,121 @@ export interface PaginatedResponse<T> {
   next: string | null;
   previous: string | null;
   results: T[];
+}
+
+export interface CADDocumentRecord {
+  id: string;
+  project_id: string;
+  project_name: string;
+  project_version: string;
+  version_number: number;
+  source_name?: string;
+  source_format: string;
+  library_name: string;
+  library_version: string;
+  file_version: string;
+  schema_name: string;
+  source_units: string;
+  unit_to_meter_factor: number | null;
+  entity_count: number;
+  layer_count: number;
+  block_count: number;
+  ifc_element_count: number;
+  unsupported_count: number;
+  header_metadata_json: Record<string, unknown>;
+  external_references_json: Array<Record<string, unknown>>;
+  extraction_options_json: Record<string, unknown>;
+  stage_timings_json: Record<string, number>;
+  peak_rss_mb: number;
+}
+
+export interface CADLayerRecord {
+  id: string;
+  layer_id: string;
+  name: string;
+  color: number | null;
+  true_color: number | null;
+  linetype: string;
+  lineweight: number | null;
+  is_on: boolean;
+  is_frozen: boolean;
+  is_locked: boolean;
+  is_plottable: boolean;
+  entity_count: number;
+  provenance: ProvenanceStatus;
+}
+
+export interface CADBlockRecord {
+  id: string;
+  block_id: string;
+  name: string;
+  base_point_json: number[];
+  is_layout: boolean;
+  is_anonymous: boolean;
+  is_xref: boolean;
+  xref_path: string;
+  entity_count: number;
+  nested_blocks_json: string[];
+  provenance: ProvenanceStatus;
+}
+
+export interface CADEntityRecord {
+  id: string;
+  entity_key: string;
+  handle: string;
+  entity_type: string;
+  owner_handle: string;
+  layer_name: string;
+  layout_name: string;
+  block_name: string;
+  linetype: string;
+  color: number | null;
+  ocs_applied: boolean;
+  is_supported: boolean;
+  native_coordinates_json: Record<string, unknown>;
+  world_coordinates_json: Record<string, unknown>;
+  geometry_metrics_json: Record<string, unknown>;
+  dimension_data_json: Record<string, unknown>;
+  classification_json: Record<string, unknown>;
+  attributes_json: Record<string, unknown>;
+  warnings_json: string[];
+  provenance: ProvenanceStatus;
+}
+
+export interface BIMElementRecord {
+  id: string;
+  global_id: string;
+  step_id: number;
+  ifc_class: string;
+  name: string;
+  description: string;
+  object_type: string;
+  predefined_type: string;
+  tag: string;
+  spatial_parent_guid: string | null;
+  storey_name: string;
+  placement_json: Record<string, unknown>;
+  property_sets_json: Array<{ name: string; step_id?: number; is_type_inherited?: boolean; properties: Record<string, unknown> }>;
+  quantity_sets_json: Array<{ name: string; quantities: Array<{ name: string; quantity_type: string; raw_value: number | null; raw_unit: string; normalized_value: number | null; normalized_unit: string; provenance: ProvenanceStatus }> }>;
+  materials_json: Array<Record<string, unknown>>;
+  classifications_json: Array<Record<string, unknown>>;
+  representations_json: Array<Record<string, unknown>>;
+  geometry_summary_json: {
+    status: string;
+    bbox_min?: number[] | null;
+    bbox_max?: number[] | null;
+    dimensions_xyz?: number[] | null;
+    surface_area?: number | null;
+    volume?: number | null;
+    is_watertight?: boolean | null;
+    vertex_count?: number;
+    face_count?: number;
+    unit?: string;
+    normalized_surface_area_m2?: number | null;
+    normalized_volume_m3?: number | null;
+    error?: string;
+    provenance?: ProvenanceStatus;
+  };
+  warnings_json: string[];
+  provenance: ProvenanceStatus;
 }

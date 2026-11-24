@@ -63,6 +63,11 @@ def build_structured_project_export(
     source_hash = getattr(manifest, "source_sha256", "") if manifest else ""
     warnings = list(getattr(manifest, "warnings", []) or []) if manifest else []
 
+    section_count_by_parent: dict[str, int] = {}
+    for c in project.objects:
+        if c.is_measurement_section and c.parent_guid is not None:
+            section_count_by_parent[c.parent_guid] = section_count_by_parent.get(c.parent_guid, 0) + 1
+
     takeoffs = [
         {
             "native_guid": o.native_guid,
@@ -72,7 +77,7 @@ def build_structured_project_export(
             "parent_guid": o.parent_guid,
             "division": o.division,
             "measurements": [m.model_dump(mode="json") for m in o.measurements],
-            "section_count": len(o.sections) or sum(1 for c in project.objects if c.parent_guid == o.native_guid and c.is_measurement_section),
+            "section_count": len(o.sections) or section_count_by_parent.get(o.native_guid, 0),
             "provenance": o.provenance.value,
         }
         for o in project.objects
@@ -145,6 +150,11 @@ def build_structured_project_export(
         "relationships": [r.model_dump(mode="json") for r in project.relationships],
         "assemblies": [a.model_dump(mode="json") for a in project.assemblies],
         "validation": report.validation.model_dump(mode="json") if report and report.validation else None,
+        **(
+            {"cad_document": project.cad_document.model_dump(mode="json")}
+            if getattr(project, "cad_document", None) is not None
+            else {}
+        ),
     }
 
 

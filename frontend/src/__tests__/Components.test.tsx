@@ -134,4 +134,21 @@ describe("Core Provenance & Native Inspection Components", () => {
     expect(screen.getByText("(empty Name attribute)")).toBeInTheDocument();
     expect(screen.getByText("Independent Calculation Audit")).toBeInTheDocument();
   });
+
+  it("distinguishes DXF/IFC native, calculated, and inferred provenance badges without rasterizing", () => {
+    render(
+      <div data-testid="cad-bim-prov-row">
+        <span>Qto_WallBaseQuantities</span>
+        <ProvenanceBadge status="native" />
+        <span>Geometry.CalculatedVolume</span>
+        <ProvenanceBadge status="calculated" />
+        <span>A-WALL Rule Category</span>
+        <ProvenanceBadge status="inferred" />
+      </div>
+    );
+    expect(screen.getByText("Qto_WallBaseQuantities")).toBeInTheDocument();
+    expect(screen.getByText("native")).toBeInTheDocument();
+    expect(screen.getByText("calculated")).toBeInTheDocument();
+    expect(screen.getByText("inferred")).toBeInTheDocument();
+  });
 });

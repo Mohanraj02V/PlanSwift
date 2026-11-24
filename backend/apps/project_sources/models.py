@@ -11,11 +11,14 @@ class ProjectSource(models.Model):
     class SourceKind(models.TextChoices):
         LOCAL_PATH = "local_path", "Local Configured Path"
         UPLOADED_ARCHIVE = "uploaded_archive", "Protected Uploaded Archive"
+        UPLOADED_DXF = "uploaded_dxf", "Uploaded DXF Drawing"
+        UPLOADED_IFC = "uploaded_ifc", "Uploaded IFC BIM Model"
         COM_SNAPSHOT = "com_snapshot", "PlanSwift COM Snapshot"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="sources")
     source_kind = models.CharField(max_length=32, choices=SourceKind.choices, default=SourceKind.LOCAL_PATH)
+    source_format = models.CharField(max_length=32, default="planswift", db_index=True)
     source_path = models.CharField(max_length=1024)
     source_name = models.CharField(max_length=255)
     actual_extension = models.CharField(max_length=32, blank=True)

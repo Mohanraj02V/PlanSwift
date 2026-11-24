@@ -39,6 +39,7 @@ class OrganizationMember(models.Model):
         ESTIMATOR = "estimator", "Estimator"
         REVIEWER = "reviewer", "Reviewer"
         VIEWER = "viewer", "Viewer"
+        ESTIMATION_ONLY = "estimation_only", "Estimation Only"
         CONNECTOR_AGENT = "connector_agent", "Connector Agent"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
