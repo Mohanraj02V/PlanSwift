@@ -1,12 +1,21 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { getCapabilities, getEffectiveRole } from "@/lib/rbac";
 import { apiRequest } from "@/services/api-client/client";
-import { getAccessToken } from "@/services/authentication/auth";
-import type { Organization, PaginatedResponse, Project, UserProfile } from "@/types/api";
+import type {
+  Organization,
+  PaginatedResponse,
+  Project,
+  UserCapabilities,
+  UserProfile,
+  UserRole,
+} from "@/types/api";
 
 interface ProjectContextValue {
   user: UserProfile | null;
+  role: UserRole | null;
+  capabilities: UserCapabilities;
   organizations: Organization[];
   projects: Project[];
   selectedProjectId: string;
@@ -14,6 +23,7 @@ interface ProjectContextValue {
   setSelectedProjectId: (id: string) => void;
   loading: boolean;
   refreshContext: () => Promise<void>;
+  clearSession: () => void;
 }
 
 const ProjectContext = createContext<ProjectContextValue | undefined>(undefined);
@@ -32,22 +42,22 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const clearSession = useCallback(() => {
+    setUser(null);
+    setOrganizations([]);
+    setProjects([]);
+    setSelectedProjectIdState("");
+  }, []);
+
   const refreshContext = useCallback(async () => {
-    if (!getAccessToken()) {
-      setUser(null);
-      setOrganizations([]);
-      setProjects([]);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     try {
-      const [me, orgResp, projResp] = await Promise.all([
-        apiRequest<UserProfile>("/auth/me/"),
+      const me = await apiRequest<UserProfile>("/auth/me/");
+      setUser(me);
+      const [orgResp, projResp] = await Promise.all([
         apiRequest<PaginatedResponse<Organization>>("/organizations/"),
         apiRequest<PaginatedResponse<Project>>("/projects/"),
       ]);
-      setUser(me);
       setOrganizations(orgResp.results || []);
       const projList = projResp.results || [];
       setProjects(projList);
@@ -56,9 +66,13 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         setSelectedProjectIdState(saved);
       } else if (projList.length > 0) {
         setSelectedProjectIdState(projList[0].id);
+      } else {
+        setSelectedProjectIdState("");
       }
     } catch {
-      // Unauthenticated or expired session handled gracefully
+      setUser(null);
+      setOrganizations([]);
+      setProjects([]);
     } finally {
       setLoading(false);
     }
@@ -68,12 +82,16 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     refreshContext();
   }, [refreshContext]);
 
+  const role = getEffectiveRole(user);
+  const capabilities = getCapabilities(user);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
 
   return (
     <ProjectContext.Provider
       value={{
         user,
+        role,
+        capabilities,
         organizations,
         projects,
         selectedProjectId,
@@ -81,6 +99,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         setSelectedProjectId,
         loading,
         refreshContext,
+        clearSession,
       }}
     >
       {children}

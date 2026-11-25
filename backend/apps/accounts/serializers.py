@@ -5,10 +5,11 @@ from __future__ import annotations
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import is_estimation_only_user, is_org_admin_user
+from apps.permissions.rbac import get_primary_role, get_user_capabilities, is_admin
 
 User = get_user_model()
 
@@ -20,28 +21,17 @@ def _user_memberships_payload(user) -> list[dict]:
             "organization_name": m.organization.name,
             "role": m.role,
         }
-        for m in OrganizationMember.objects.filter(user=user, is_active=True)
+        for m in OrganizationMember.objects.filter(user=user, is_active=True, organization__is_active=True)
         .select_related("organization")
         .order_by("created_at")
     ]
-
-
-def _resolve_primary_role(user, memberships: list[dict]) -> str:
-    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
-        return "admin"
-    roles = [m["role"] for m in memberships]
-    if not roles:
-        return "viewer"
-    for priority in ("owner", "admin", "estimator", "reviewer", "estimation_only", "viewer", "connector_agent"):
-        if priority in roles:
-            return priority
-    return roles[0]
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
     is_admin = serializers.SerializerMethodField()
     primary_role = serializers.SerializerMethodField()
     allowed_pages = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
     memberships = serializers.SerializerMethodField()
 
     class Meta:
@@ -51,11 +41,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "email",
             "full_name",
             "job_title",
-            "is_staff",
             "is_superuser",
             "is_admin",
             "primary_role",
             "allowed_pages",
+            "capabilities",
+            "must_change_password",
             "memberships",
             "mfa_enabled",
             "is_active",
@@ -65,11 +56,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "email",
-            "is_staff",
             "is_superuser",
             "is_admin",
             "primary_role",
             "allowed_pages",
+            "capabilities",
+            "must_change_password",
             "memberships",
             "mfa_enabled",
             "is_active",
@@ -78,54 +70,51 @@ class UserProfileSerializer(serializers.ModelSerializer):
         ]
 
     def get_is_admin(self, obj) -> bool:
-        return is_org_admin_user(obj)
+        return is_admin(obj)
 
-    def get_primary_role(self, obj) -> str:
-        return _resolve_primary_role(obj, _user_memberships_payload(obj))
+    def get_primary_role(self, obj) -> str | None:
+        return get_primary_role(obj)
+
+    def get_capabilities(self, obj) -> dict[str, bool]:
+        return get_user_capabilities(obj)
 
     def get_allowed_pages(self, obj) -> list[str]:
-        if is_estimation_only_user(obj):
-            return ["/estimation"]
-        return ["*"]
+        role = get_primary_role(obj)
+        if role == OrganizationMember.Role.ADMIN:
+            return ["*"]
+        if role in (OrganizationMember.Role.ESTIMATOR, OrganizationMember.Role.USER):
+            return ["/estimator"]
+        return []
 
     def get_memberships(self, obj) -> list[dict]:
         return _user_memberships_payload(obj)
 
 
 class VortexenTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Enhanced JWT serializer adding role/admin/identity claims and returning user profile."""
+    """JWT serializer embedding role, token_version revocation counter, and sanitized auth failures."""
+
+    default_error_messages = {
+        "no_active_account": "Invalid email or password.",
+    }
 
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
         memberships = _user_memberships_payload(user)
-        primary_role = _resolve_primary_role(user, memberships)
         token["email"] = user.email
         token["full_name"] = user.full_name or ""
-        token["is_admin"] = is_org_admin_user(user)
-        token["primary_role"] = primary_role
+        token["is_admin"] = is_admin(user)
+        token["primary_role"] = get_primary_role(user) or ""
         token["roles"] = [m["role"] for m in memberships]
+        token["token_version"] = int(getattr(user, "token_version", 1))
         return token
 
     def validate(self, attrs):
         data = super().validate(attrs)
+        if not getattr(self.user, "is_superuser", False) and get_primary_role(self.user) is None:
+            raise AuthenticationFailed("Invalid email or password.", code="no_active_membership")
         data["user"] = UserProfileSerializer(self.user).data
         return data
-
-
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=10)
-
-    class Meta:
-        model = User
-        fields = ["email", "password", "full_name", "job_title"]
-
-    def validate_password(self, value: str) -> str:
-        validate_password(value)
-        return value
-
-    def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -143,8 +132,9 @@ class AdminUserCreateSerializer(serializers.Serializer):
     full_name = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
     job_title = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
     organization = serializers.UUIDField(required=False)
-    role = serializers.ChoiceField(choices=OrganizationMember.Role.choices, default=OrganizationMember.Role.ESTIMATOR)
+    role = serializers.ChoiceField(choices=OrganizationMember.Role.choices, default=OrganizationMember.Role.USER)
     is_active = serializers.BooleanField(default=True)
+    must_change_password = serializers.BooleanField(default=False)
 
     def validate_email(self, value: str) -> str:
         normalized = User.objects.normalize_email(value).strip()
@@ -164,6 +154,7 @@ class AdminUserUpdateSerializer(serializers.Serializer):
     organization = serializers.UUIDField(required=False)
     is_active = serializers.BooleanField(required=False)
     password = serializers.CharField(write_only=True, min_length=10, required=False, allow_blank=True)
+    must_change_password = serializers.BooleanField(required=False)
 
     def validate_password(self, value: str) -> str:
         if value:

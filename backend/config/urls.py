@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib import admin
 from django.db import connection
 from django.urls import include, path
@@ -9,6 +10,8 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from apps.permissions.rbac import IsAdminOnly
 
 
 class HealthCheckView(APIView):
@@ -24,8 +27,6 @@ class HealthCheckView(APIView):
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/health/", HealthCheckView.as_view(), name="api-health"),
-    path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
-    path("api/docs/", SpectacularSwaggerView.as_view(url_name="api-schema"), name="api-docs"),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/organizations/", include("apps.organizations.urls")),
     path("api/v1/projects/", include("apps.projects.urls")),
@@ -52,3 +53,10 @@ urlpatterns = [
     path("api/v1/audit/", include("apps.audit_logs.urls")),
     path("api/v1/notifications/", include("apps.notifications.urls")),
 ]
+
+if getattr(settings, "DEBUG", False) or getattr(settings, "ENABLE_API_DOCS", False):
+    urlpatterns = [
+        *urlpatterns,
+        path("api/schema/", SpectacularAPIView.as_view(permission_classes=[permissions.IsAuthenticated, IsAdminOnly]), name="api-schema"),
+        path("api/docs/", SpectacularSwaggerView.as_view(url_name="api-schema", permission_classes=[permissions.IsAuthenticated, IsAdminOnly]), name="api-docs"),
+    ]

@@ -9,11 +9,10 @@ from django.utils import timezone
 
 class ProjectSource(models.Model):
     class SourceKind(models.TextChoices):
-        LOCAL_PATH = "local_path", "Local Configured Path"
+        LOCAL_PATH = "local_path", "Legacy Server Path (Read-Only)"
         UPLOADED_ARCHIVE = "uploaded_archive", "Protected Uploaded Archive"
         UPLOADED_DXF = "uploaded_dxf", "Uploaded DXF Drawing"
         UPLOADED_IFC = "uploaded_ifc", "Uploaded IFC BIM Model"
-        COM_SNAPSHOT = "com_snapshot", "PlanSwift COM Snapshot"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="sources")

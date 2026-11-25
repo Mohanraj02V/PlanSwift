@@ -77,6 +77,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "config.middleware.SecurityHeadersMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -157,11 +158,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.accounts.authentication.CookieAwareJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
-        "apps.permissions.rbac.IsEstimationRoleScoped",
+        "apps.permissions.rbac.RolePolicyPermission",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
@@ -175,12 +176,21 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "60/minute",
         "user": "600/minute",
+        "auth_login": os.environ.get("THROTTLE_AUTH_LOGIN", "10/minute"),
+        "auth_refresh": os.environ.get("THROTTLE_AUTH_REFRESH", "30/minute"),
     },
 }
+
+JWT_ACCESS_COOKIE_NAME = os.environ.get("JWT_ACCESS_COOKIE_NAME", "vortexen_access")
+JWT_REFRESH_COOKIE_NAME = os.environ.get("JWT_REFRESH_COOKIE_NAME", "vortexen_refresh")
+JWT_COOKIE_SECURE = os.environ.get("JWT_COOKIE_SECURE", "false").lower() == "true"
+JWT_COOKIE_SAMESITE = os.environ.get("JWT_COOKIE_SAMESITE", "Lax")
+ENABLE_API_DOCS = os.environ.get("ENABLE_API_DOCS", "false").lower() == "true"
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
@@ -213,14 +223,13 @@ FILE_UPLOAD_HANDLERS = [
 ]
 MAX_UPLOAD_ZIP_BYTES = int(os.environ.get("MAX_UPLOAD_ZIP_BYTES", str(1024 * 1024 * 1024)))  # 1 GiB
 
-# Source Ingestion & Extraction Guardrails
+# Extraction & File Upload Guardrails
+EXTRACTION_WORK_DIR = Path(os.environ.get("EXTRACTION_WORK_DIR", str(WORKSPACE_ROOT / "extracted_tmp")))
 ALLOWED_SOURCE_ROOTS = [
     str(Path(p.strip()).resolve())
-    for p in os.environ.get("ALLOWED_SOURCE_ROOTS", str(WORKSPACE_ROOT)).split(";")
+    for p in os.environ.get("ALLOWED_SOURCE_ROOTS", str(EXTRACTION_WORK_DIR)).split(";")
     if p.strip()
 ]
-PLANSWIFT_DEFAULT_SOURCE_PATH = os.environ.get("PLANSWIFT_SOURCE_PATH", str(WORKSPACE_ROOT / "project 4.SwiftJob.zip"))
-EXTRACTION_WORK_DIR = Path(os.environ.get("EXTRACTION_WORK_DIR", str(WORKSPACE_ROOT / "extracted_tmp")))
 EXTRACTION_EXECUTION_MODE = os.environ.get("EXTRACTION_EXECUTION_MODE", "eager")  # eager | thread | celery
 EXTRACTION_MAX_ARCHIVE_ENTRIES = int(os.environ.get("EXTRACTION_MAX_ARCHIVE_ENTRIES", "10000"))
 EXTRACTION_MAX_UNCOMPRESSED_BYTES = int(os.environ.get("EXTRACTION_MAX_UNCOMPRESSED_BYTES", str(5 * 1024 * 1024 * 1024)))
@@ -240,6 +249,10 @@ IFC_GEOMETRY_TIMEOUT_SECONDS = float(os.environ.get("IFC_GEOMETRY_TIMEOUT_SECOND
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_ALWAYS_EAGER = EXTRACTION_EXECUTION_MODE == "eager"
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_TIME_LIMIT = int(os.environ.get("CELERY_TASK_TIME_LIMIT", "600"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.environ.get("CELERY_TASK_SOFT_TIME_LIMIT", "540"))
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.environ.get("CELERY_WORKER_MAX_TASKS_PER_CHILD", "50"))
 
 # AI Provider Settings (strictly independent from extraction_engine)
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "deterministic")

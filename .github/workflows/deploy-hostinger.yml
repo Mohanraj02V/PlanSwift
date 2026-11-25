@@ -1,0 +1,131 @@
+name: Deploy Vortexen Estimator to Hostinger KVM 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_trivy:
+        description: Run Trivy vulnerability scan before deploying
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+  push:
+    branches: [main]
+
+concurrency:
+  group: vortexen-hostinger-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Verify Django migrations and checks
+        run: |
+          python backend/manage.py migrate --noinput
+          python backend/manage.py migrate --check
+          python backend/manage.py check
+
+      - name: Run extraction engine and backend tests
+        run: pytest extraction_engine/tests backend/tests -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run frontend typecheck and tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+  build-and-deploy:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_HOSTINGER_AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required deployment secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VORTEXEN_DOMAIN: ${{ secrets.VORTEXEN_DOMAIN }}
+        run: |
+          for v in VPS_HOST VPS_USER VPS_SSH_KEY VPS_SSH_KNOWN_HOSTS VORTEXEN_DOMAIN; do
+            if [ -z "${!v}" ]; then
+              echo "ERROR: Missing required repository secret $v" >&2
+              exit 1
+            fi
+          done
+
+      - name: Build immutable production Docker images
+        run: |
+          mkdir -p dist
+          docker build -t "vortexen-backend:${{ github.sha }}" -f backend/Dockerfile .
+          docker build \
+            --build-arg "NEXT_PUBLIC_API_BASE_URL=/api/v1" \
+            -t "vortexen-frontend:${{ github.sha }}" \
+            -f frontend/Dockerfile \
+            frontend
+
+      - name: Scan images with Trivy
+        if: github.event_name != 'workflow_dispatch' || inputs.run_trivy == 'true'
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          scan-type: image
+          image-ref: "vortexen-backend:${{ github.sha }}"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Package Docker image tarballs and SHA256SUMS
+        run: |
+          docker save "vortexen-backend:${{ github.sha }}" | gzip > "dist/vortexen-backend-${{ github.sha }}.tar.gz"
+          docker save "vortexen-frontend:${{ github.sha }}" | gzip > "dist/vortexen-frontend-${{ github.sha }}.tar.gz"
+          cp deploy/hostinger/docker-compose.production.yml dist/docker-compose.production.yml
+          (cd dist && sha256sum \
+            "vortexen-backend-${{ github.sha }}.tar.gz" \
+            "vortexen-frontend-${{ github.sha }}.tar.gz" \
+            "docker-compose.production.yml" > SHA256SUMS)
+
+      - name: Configure SSH and deploy to Hostinger KVM 2
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 0600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0644 ~/.ssh/known_hosts
+
+          REMOTE_DIR="/opt/vortexen-estimator/incoming/${{ github.sha }}"
+          ssh -i ~/.ssh/deploy_key -p "${VPS_PORT}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${REMOTE_DIR}'"
+          scp -i ~/.ssh/deploy_key -P "${VPS_PORT}" dist/* "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/"
+          ssh -i ~/.ssh/deploy_key -p "${VPS_PORT}" "${VPS_USER}@${VPS_HOST}" "sudo /usr/local/sbin/vortexen-deploy '${{ github.sha }}'"
+
+      - name: Verify live HTTPS health endpoint
+        env:
+          VORTEXEN_DOMAIN: ${{ secrets.VORTEXEN_DOMAIN }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 "https://${VORTEXEN_DOMAIN}/api/v1/health/"

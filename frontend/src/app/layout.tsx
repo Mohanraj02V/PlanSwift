@@ -4,15 +4,15 @@ import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Vortexen Estimator — PlanSwift Native Project Intelligence",
+  title: "Vortexen Estimator — PlanSwift, DXF & IFC Engineering Platform",
   description:
-    "PlanSwift Native Project Extraction, Canonical Digital Project Model, and Provenance-Aware AI Estimation Platform",
+    "Official Vortexen Engineering Workspace for PlanSwift, DXF, and IFC extraction, quantity verification, and commercial quotations.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+      <body className="min-h-screen bg-[#f8fafc] text-[#0f172a] antialiased">
         <ProjectProvider>{children}</ProjectProvider>
       </body>
     </html>

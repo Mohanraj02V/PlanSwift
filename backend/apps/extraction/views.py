@@ -7,8 +7,7 @@ from rest_framework.response import Response
 from apps.audit_logs.services import log_audit_event
 from apps.background_jobs.tasks import dispatch_extraction_run
 from apps.extraction.models import ExtractionError, ExtractionEvent, ExtractionRun
-from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import IsOrgEditor, IsOrgMember, get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, IsEstimatorOrAdmin, IsOrgMember, can_start_extraction, get_user_org_ids
 from apps.project_sources.models import ProjectSource
 from apps.projects.models import Project
 
@@ -93,8 +92,10 @@ class ExtractionRunViewSet(viewsets.ModelViewSet):
         )
 
     def get_permissions(self):
-        if self.action in ("create", "cancel", "destroy"):
-            return [permissions.IsAuthenticated(), IsOrgEditor()]
+        if self.action == "create":
+            return [permissions.IsAuthenticated(), IsEstimatorOrAdmin()]
+        if self.action in ("cancel", "update", "partial_update", "destroy"):
+            return [permissions.IsAuthenticated(), IsAdminOnly()]
         return [permissions.IsAuthenticated(), IsOrgMember()]
 
     def create(self, request, *args, **kwargs):
@@ -103,12 +104,7 @@ class ExtractionRunViewSet(viewsets.ModelViewSet):
         project = Project.objects.filter(id=project_id).select_related("organization").first()
         if not project:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not OrganizationMember.objects.filter(
-            organization=project.organization,
-            user=request.user,
-            is_active=True,
-            role__in=IsOrgEditor.ALLOWED_ROLES,
-        ).exists():
+        if not can_start_extraction(request.user, project.organization):
             return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
 
         source = (

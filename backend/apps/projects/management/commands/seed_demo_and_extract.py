@@ -7,7 +7,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from apps.estimation.services import generate_estimation_session
 from apps.extraction.models import ExtractionRun
@@ -21,25 +21,33 @@ from extraction_engine.parsers.archive_parser import inspect_archive_manifest
 
 
 class Command(BaseCommand):
-    help = "Create local dev user/org and extract configured PLANSWIFT_SOURCE_PATH."
+    help = "Development-only command to seed a local dev Admin/Org and extract a sample PlanSwift package."
 
     def add_arguments(self, parser):
         parser.add_argument("--email", default="estimator@vortexen.local")
-        parser.add_argument("--password", default=os.environ.get("DEV_ADMIN_PASSWORD", "VortexenDev123!"))
-        parser.add_argument("--source", default=settings.PLANSWIFT_DEFAULT_SOURCE_PATH)
+        parser.add_argument("--password", default=os.environ.get("DEV_ADMIN_PASSWORD", ""))
+        parser.add_argument("--source", default=getattr(settings, "PLANSWIFT_DEFAULT_SOURCE_PATH", ""))
 
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError("seed_demo_and_extract is strictly limited to local development (DEBUG=True).")
+        password = (options.get("password") or "").strip()
+        if len(password) < 10:
+            raise CommandError(
+                "Pass --password (min 10 chars) or set DEV_ADMIN_PASSWORD in your environment before running."
+            )
+
         User = get_user_model()
         user, created = User.objects.get_or_create(
             email=options["email"],
-            defaults={"full_name": "Lead Estimator", "job_title": "Senior MEP Estimator", "is_staff": True},
+            defaults={"full_name": "Organization Admin", "job_title": "Principal Estimator"},
         )
         if created:
-            user.set_password(options["password"])
+            user.set_password(password)
             user.save()
 
         org, _ = Organization.objects.get_or_create(slug="vortexen-demo", defaults={"name": "Vortexen Engineering", "created_by": user})
-        OrganizationMember.objects.get_or_create(organization=org, user=user, defaults={"role": OrganizationMember.Role.OWNER})
+        OrganizationMember.objects.get_or_create(organization=org, user=user, defaults={"role": OrganizationMember.Role.ADMIN})
 
         project, _ = Project.objects.get_or_create(
             organization=org,

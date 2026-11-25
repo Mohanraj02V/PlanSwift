@@ -1,0 +1,191 @@
+name: vortexen-estimator
+
+services:
+  vortexen-db:
+    image: postgres:16-alpine
+    container_name: vortexen-db
+    restart: unless-stopped
+    shm_size: 128m
+    mem_limit: 512m
+    cpus: "0.4"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - vortexen_pgdata:/var/lib/postgresql/data
+    networks:
+      - vortexen_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vortexen-redis:
+    image: redis:7-alpine
+    container_name: vortexen-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    mem_limit: 192m
+    cpus: "0.2"
+    networks:
+      - vortexen_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vortexen-api:
+    image: vortexen-backend:${IMAGE_TAG:-latest}
+    container_name: vortexen-api
+    restart: unless-stopped
+    env_file:
+      - /opt/vortexen-estimator/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      EXTRACTION_EXECUTION_MODE: celery
+      EXTRACTION_WORK_DIR: /data/uploads
+    ports:
+      - "127.0.0.1:8100:8000"
+    volumes:
+      - vortexen_uploads:/data/uploads
+      - /opt/vortexen-estimator/staticfiles:/app/backend/staticfiles
+    depends_on:
+      vortexen-db:
+        condition: service_healthy
+      vortexen-redis:
+        condition: service_healthy
+    networks:
+      - vortexen_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1024m
+    cpus: "0.7"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vortexen-worker:
+    image: vortexen-backend:${IMAGE_TAG:-latest}
+    container_name: vortexen-worker
+    restart: unless-stopped
+    command:
+      - celery
+      - -A
+      - config
+      - worker
+      - --loglevel=info
+      - --concurrency=1
+      - --max-tasks-per-child=20
+    env_file:
+      - /opt/vortexen-estimator/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      EXTRACTION_EXECUTION_MODE: celery
+      EXTRACTION_WORK_DIR: /data/uploads
+      IFC_GEOMETRY_THREADS: "1"
+    volumes:
+      - vortexen_uploads:/data/uploads
+    depends_on:
+      vortexen-db:
+        condition: service_healthy
+      vortexen-redis:
+        condition: service_healthy
+    networks:
+      - vortexen_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1280m
+    cpus: "0.8"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; r = redis.Redis.from_url(os.environ['CELERY_BROKER_URL'], socket_timeout=3); assert r.ping()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vortexen-web:
+    image: vortexen-frontend:${IMAGE_TAG:-latest}
+    container_name: vortexen-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - "127.0.0.1:3100:3000"
+    depends_on:
+      vortexen-api:
+        condition: service_healthy
+    networks:
+      - vortexen_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 448m
+    cpus: "0.4"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  vortexen_pgdata:
+  vortexen_uploads:
+
+networks:
+  vortexen_internal:
+    driver: bridge

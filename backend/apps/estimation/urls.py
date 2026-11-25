@@ -15,8 +15,7 @@ from apps.estimation.models import EstimationResult, EstimationSession
 from apps.estimation.quotation_excel import generate_estimation_excel_workbook
 from apps.estimation.quotation_pdf import default_quotation_metadata, generate_vortexen_quotation_pdf
 from apps.estimation.services import approve_estimation_session, generate_estimation_session
-from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import IsEstimationAllowed, IsOrgReviewerOrEditor, get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids, is_admin
 from apps.projects.models import Project
 
 
@@ -79,10 +78,11 @@ class EstimationSessionSerializer(serializers.ModelSerializer):
 
 class EstimationSessionViewSet(viewsets.ModelViewSet):
     serializer_class = EstimationSessionSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
     filterset_fields = ["project", "status"]
 
     def get_queryset(self):
-        org_ids = get_user_org_ids(self.request.user)
+        org_ids = get_user_admin_org_ids(self.request.user)
         return (
             EstimationSession.objects.filter(project__organization_id__in=org_ids)
             .select_related("project", "project__organization")
@@ -90,22 +90,15 @@ class EstimationSessionViewSet(viewsets.ModelViewSet):
         )
 
     def get_permissions(self):
-        if self.action == "approve":
-            return [permissions.IsAuthenticated(), IsOrgReviewerOrEditor()]
-        return [permissions.IsAuthenticated(), IsEstimationAllowed()]
+        return [permissions.IsAuthenticated(), IsAdminOnly()]
 
     def create(self, request, *args, **kwargs):
         project_id = request.data.get("project")
         project = Project.objects.filter(id=project_id).select_related("organization").first()
         if not project:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not OrganizationMember.objects.filter(
-            organization=project.organization,
-            user=request.user,
-            is_active=True,
-            role__in=IsEstimationAllowed.ALLOWED_ROLES,
-        ).exists():
-            return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        if not is_admin(request.user, project.organization):
+            return Response({"detail": "Organization Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
         try:
             session = generate_estimation_session(project, request.user, session_name=request.data.get("name", ""))
         except ValueError as exc:

@@ -20,7 +20,7 @@ function textToLines(val: string): string[] {
 }
 
 export default function EstimationPage() {
-  const { user, selectedProjectId } = useProjectContext();
+  const { capabilities, selectedProjectId } = useProjectContext();
   const [sessions, setSessions] = useState<EstimationSession[]>([]);
   const [rows, setRows] = useState<EstimationResultRow[]>([]);
   const [quoteMeta, setQuoteMeta] = useState<QuotationMetadata>({});
@@ -29,8 +29,6 @@ export default function EstimationPage() {
   const [downloading, setDownloading] = useState<"excel" | "pdf" | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  const isEstimationOnly = user?.primary_role === "estimation_only";
 
   const syncFromSession = (sess: EstimationSession | undefined) => {
     if (!sess) {
@@ -185,7 +183,7 @@ export default function EstimationPage() {
           <button
             type="button"
             onClick={handleGenerate}
-            className="rounded bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+            className="rounded-lg bg-[#0052cc] px-4 py-2 text-xs font-semibold text-white hover:bg-[#003d99]"
           >
             Generate Deterministic Takeoff Rollup
           </button>
@@ -226,7 +224,7 @@ export default function EstimationPage() {
             >
               {downloading === "pdf" ? "Generating PDF..." : "Download Vortexen PDF Quotation"}
             </button>
-            {!isEstimationOnly && active.status !== "approved" && (
+            {capabilities.can_access_admin_modules && active.status !== "approved" && (
               <button
                 type="button"
                 onClick={() => handleApprove(active.id)}

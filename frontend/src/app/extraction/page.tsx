@@ -25,17 +25,14 @@ function formatBytes(bytes: number): string {
 }
 
 export default function ExtractionPage() {
-  const { user, projects, selectedProjectId, refreshContext } = useProjectContext();
-  const canUpload = Boolean(
-    user?.is_admin || user?.primary_role === "owner" || user?.primary_role === "estimator"
-  );
+  const { user, capabilities, projects, selectedProjectId, refreshContext } = useProjectContext();
+  const canUpload = capabilities.can_upload_source;
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [autoExtract, setAutoExtract] = useState(true);
   const [extractGeometry, setExtractGeometry] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [sourcePath, setSourcePath] = useState("");
   const [sources, setSources] = useState<ProjectSource[]>([]);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
   const [message, setMessage] = useState("");
@@ -120,31 +117,6 @@ export default function ExtractionPage() {
       setError(err instanceof Error ? err.message : "File upload failed.");
     } finally {
       setUploading(false);
-    }
-  };
-
-  const handleRegisterAndExtract = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setMessage("");
-    const pid = selectedProjectId || projects[0]?.id;
-    if (!pid) {
-      setError("Create or select a project first.");
-      return;
-    }
-    try {
-      const src = await apiRequest<ProjectSource>("/project-sources/", {
-        method: "POST",
-        body: JSON.stringify({ project: pid, source_path: sourcePath }),
-      });
-      const run = await apiRequest<ExtractionRun>("/extraction/", {
-        method: "POST",
-        body: JSON.stringify({ project: pid, project_source: src.id }),
-      });
-      setMessage(`Extraction ${run.status}: ${JSON.stringify(run.summary)}`);
-      await Promise.all([loadData(), refreshContext()]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Extraction failed.");
     }
   };
 
@@ -259,25 +231,6 @@ export default function ExtractionPage() {
                 className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {uploading ? `Uploading (${uploadPct ?? 0}%)...` : "Upload & Extract Project"}
-              </button>
-            </form>
-          </div>
-
-          <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-900">Import Pre-Staged Server Archive</h2>
-            <p className="text-xs text-slate-500">
-              Register a read-only package inside configured server source roots without browser transfer.
-            </p>
-            <form onSubmit={handleRegisterAndExtract} className="space-y-3">
-              <input
-                type="text"
-                value={sourcePath}
-                onChange={(e) => setSourcePath(e.target.value)}
-                placeholder="Authorized server source path or blank for default"
-                className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-              />
-              <button type="submit" className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                Inspect &amp; Extract Staged Archive
               </button>
             </form>
           </div>

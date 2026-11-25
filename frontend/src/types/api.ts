@@ -13,10 +13,26 @@ export type ProvenanceStatus =
   | "derived"
   | "ai_inferred";
 
+export type UserRole = "admin" | "estimator" | "user";
+
+export interface UserCapabilities {
+  can_view_estimator_workspace: boolean;
+  can_upload_source: boolean;
+  can_start_extraction: boolean;
+  can_view_extraction_results: boolean;
+  can_manage_projects: boolean;
+  can_edit_project: boolean;
+  can_delete_project: boolean;
+  can_export: boolean;
+  can_manage_users: boolean;
+  can_view_audit: boolean;
+  can_access_admin_modules: boolean;
+}
+
 export interface UserMembership {
   organization_id: string;
   organization_name: string;
-  role: string;
+  role: UserRole;
 }
 
 export interface UserProfile {
@@ -24,11 +40,12 @@ export interface UserProfile {
   email: string;
   full_name: string;
   job_title: string;
-  is_staff?: boolean;
   is_superuser?: boolean;
   is_admin?: boolean;
-  primary_role?: string;
+  primary_role?: UserRole | null;
   allowed_pages?: string[];
+  capabilities?: UserCapabilities;
+  must_change_password?: boolean;
   memberships?: UserMembership[];
   mfa_enabled: boolean;
   is_active: boolean;

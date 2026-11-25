@@ -8,21 +8,23 @@ from rest_framework.response import Response
 from apps.audit_logs.services import log_audit_event
 from apps.organizations.models import Organization, OrganizationMember
 from apps.organizations.serializers import OrganizationMemberSerializer, OrganizationSerializer
-from apps.permissions.rbac import IsOrgAdminOrOwner, IsOrgMember
+from apps.permissions.rbac import IsAdminOnly, IsOrgMember
 
 
 class OrganizationViewSet(viewsets.ModelViewSet):
     serializer_class = OrganizationSerializer
 
     def get_queryset(self):
-        return Organization.objects.filter(members__user=self.request.user, members__is_active=True).distinct()
+        return Organization.objects.filter(
+            members__user=self.request.user,
+            members__is_active=True,
+            is_active=True,
+        ).distinct()
 
     def get_permissions(self):
-        if self.action in ("list", "create"):
-            return [permissions.IsAuthenticated()]
-        if self.action in ("update", "partial_update", "destroy", "add_member"):
-            return [permissions.IsAuthenticated(), IsOrgAdminOrOwner()]
-        return [permissions.IsAuthenticated(), IsOrgMember()]
+        if self.action in ("list", "retrieve"):
+            return [permissions.IsAuthenticated(), IsOrgMember()]
+        return [permissions.IsAuthenticated(), IsAdminOnly()]
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -30,7 +32,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         OrganizationMember.objects.create(
             organization=org,
             user=self.request.user,
-            role=OrganizationMember.Role.OWNER,
+            role=OrganizationMember.Role.ADMIN,
         )
         log_audit_event(
             action="organization.created",
@@ -41,15 +43,15 @@ class OrganizationViewSet(viewsets.ModelViewSet):
             resource_id=str(org.id),
         )
 
-    @action(detail=True, methods=["get", "post"], url_path="members")
+    @action(detail=True, methods=["get", "post"], url_path="members", permission_classes=[permissions.IsAuthenticated, IsAdminOnly])
     def members(self, request, pk=None):
         org = self.get_object()
+        member_check = IsAdminOnly()
+        if not member_check.has_object_permission(request, self, org):
+            return Response({"detail": "Organization Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
         if request.method == "GET":
             qs = OrganizationMember.objects.filter(organization=org).select_related("user")
             return Response(OrganizationMemberSerializer(qs, many=True).data)
-        member_check = IsOrgAdminOrOwner()
-        if not member_check.has_object_permission(request, self, org):
-            return Response({"detail": "Admin or Owner role required."}, status=status.HTTP_403_FORBIDDEN)
         ser = OrganizationMemberSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         member = ser.save(organization=org)

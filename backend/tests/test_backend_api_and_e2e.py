@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
@@ -69,13 +70,19 @@ SYNTHETIC_UPLOAD_XML = """<?xml version="1.0" encoding="Windows-1252"?>
 </Item>"""
 
 
-def _auth_client(email: str, password: str = "StrongPass123!") -> tuple[APIClient, User]:
+def _cookie_admin_client(email: str, org_name: str, org_slug: str, password: str = "StrongPass123!") -> tuple[APIClient, User, Organization]:
+    cache.clear()
     user = User.objects.create_user(email=email, password=password, full_name=email)
+    org = Organization.objects.create(name=org_name, slug=org_slug, created_by=user)
+    OrganizationMember.objects.create(organization=org, user=user, role=OrganizationMember.Role.ADMIN)
     client = APIClient()
     resp = client.post("/api/v1/auth/login/", {"email": email, "password": password}, format="json")
     assert resp.status_code == 200
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
-    return client, user
+    assert resp.data["authenticated"] is True
+    assert "access" not in resp.data
+    assert "refresh" not in resp.data
+    client.credentials(HTTP_X_CSRFTOKEN=resp.cookies["csrftoken"].value)
+    return client, user, org
 
 
 def _make_zip_bytes(entries: dict[str, str | bytes]) -> bytes:
@@ -88,53 +95,45 @@ def _make_zip_bytes(entries: dict[str, str | bytes]) -> bytes:
 
 @pytest.mark.django_db
 def test_auth_lifecycle_rbac_tenant_isolation_and_audit_immutability() -> None:
-    client = APIClient()
-    health = client.get("/api/v1/health/")
+    cache.clear()
+    anon = APIClient()
+    health = anon.get("/api/v1/health/")
     assert health.status_code == 200
     assert health.data["status"] == "ok"
 
-    # Legacy COM endpoint removed
-    assert client.get("/api/v1/planswift/environment/").status_code == 404
-
-    schema = client.get("/api/schema/")
-    assert schema.status_code == 200
-
-    reg = client.post(
+    # Legacy COM endpoint and public registration are removed/disabled
+    assert anon.get("/api/v1/planswift/environment/").status_code == 404
+    reg = anon.post(
         "/api/v1/auth/register/",
         {"email": "owner_a@vortexen.test", "password": "VeryStrongPassword123!", "full_name": "Owner A"},
         format="json",
     )
-    assert reg.status_code == 201
-    login = client.post(
-        "/api/v1/auth/login/",
-        {"email": "owner_a@vortexen.test", "password": "VeryStrongPassword123!"},
-        format="json",
-    )
-    assert login.status_code == 200
-    client_a = APIClient()
-    client_a.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+    assert reg.status_code == 403
 
-    ref = client_a.post("/api/v1/auth/refresh/", {"refresh": login.data["refresh"]}, format="json")
+    # Schema docs blocked for unauthenticated callers
+    assert anon.get("/api/schema/").status_code in (401, 403, 404)
+
+    client_a, user_a, org_a = _cookie_admin_client("admin_a@vortexen.test", "Org Alpha", "org-alpha")
+
+    ref = client_a.post("/api/v1/auth/refresh/", {}, format="json")
     assert ref.status_code == 200
-    assert "access" in ref.data
+    assert ref.data["authenticated"] is True
+    assert "vortexen_access" in ref.cookies
 
-    org_a_resp = client_a.post("/api/v1/organizations/", {"name": "Org Alpha", "slug": "org-alpha"}, format="json")
-    assert org_a_resp.status_code == 201
-    org_a_id = org_a_resp.data["id"]
-
-    proj_a_resp = client_a.post("/api/v1/projects/", {"organization": org_a_id, "name": "Alpha Job"}, format="json")
+    proj_a_resp = client_a.post("/api/v1/projects/", {"organization": str(org_a.id), "name": "Alpha Job"}, format="json")
     assert proj_a_resp.status_code == 201
     proj_a_id = proj_a_resp.data["id"]
 
-    client_b, user_b = _auth_client("owner_b@vortexen.test")
+    # Cross-org admin cannot view or write Org Alpha projects
+    client_b, user_b, _org_b = _cookie_admin_client("admin_b@vortexen.test", "Org Beta", "org-beta")
     assert client_b.get("/api/v1/projects/").data["count"] == 0
     assert client_b.get(f"/api/v1/projects/{proj_a_id}/").status_code == 404
-    assert client_b.post("/api/v1/projects/", {"organization": org_a_id, "name": "Hijack"}, format="json").status_code == 403
+    assert client_b.post("/api/v1/projects/", {"organization": str(org_a.id), "name": "Hijack"}, format="json").status_code == 403
 
-    org_a = Organization.objects.get(id=org_a_id)
-    OrganizationMember.objects.create(organization=org_a, user=user_b, role=OrganizationMember.Role.VIEWER)
+    # Add user_b as read-only 'user' inside Org Alpha -> can view, cannot create/mutate
+    OrganizationMember.objects.create(organization=org_a, user=user_b, role=OrganizationMember.Role.USER)
     assert client_b.get(f"/api/v1/projects/{proj_a_id}/").status_code == 200
-    assert client_b.post("/api/v1/projects/", {"organization": org_a_id, "name": "Viewer Write"}, format="json").status_code == 403
+    assert client_b.post("/api/v1/projects/", {"organization": str(org_a.id), "name": "User Write"}, format="json").status_code == 403
 
     log_entry = AuditLog.objects.first()
     assert log_entry is not None
@@ -144,17 +143,20 @@ def test_auth_lifecycle_rbac_tenant_isolation_and_audit_immutability() -> None:
     with pytest.raises(ImmutableAuditError):
         log_entry.delete()
 
-    logout_resp = client_a.post("/api/v1/auth/logout/", {"refresh": ref.data["refresh"]}, format="json")
+    logout_resp = client_a.post("/api/v1/auth/logout/", {}, format="json")
     assert logout_resp.status_code == 200
-    assert client_a.post("/api/v1/auth/refresh/", {"refresh": ref.data["refresh"]}, format="json").status_code == 401
+    assert client_a.post("/api/v1/auth/refresh/", {}, format="json").status_code == 401
 
 
 @pytest.mark.django_db
 def test_multipart_zip_upload_standalone_calculations_unsupported_and_export(tmp_path: Path, settings) -> None:
     settings.EXTRACTION_WORK_DIR = tmp_path / "work"
-    client, _ = _auth_client("uploader@vortexen.test")
-    org_id = client.post("/api/v1/organizations/", {"name": "Upload Co", "slug": "upload-co"}, format="json").data["id"]
-    proj_id = client.post("/api/v1/projects/", {"organization": org_id, "name": "Uploaded Test"}, format="json").data["id"]
+    client, _user, org = _cookie_admin_client("uploader@vortexen.test", "Upload Co", "upload-co")
+    proj_id = client.post("/api/v1/projects/", {"organization": str(org.id), "name": "Uploaded Test"}, format="json").data["id"]
+
+    # Direct server path ingestion is disabled (405 Method Not Allowed)
+    r_disabled = client.post("/api/v1/project-sources/", {"project": proj_id, "source_path": "/etc/passwd"}, format="json")
+    assert r_disabled.status_code == 405
 
     # 1. Reject non-ZIP / Zip-Slip archive safely
     bad_ext = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
@@ -189,7 +191,6 @@ def test_multipart_zip_upload_standalone_calculations_unsupported_and_export(tmp
     assert len(logs_resp.data["events"]) >= 5
 
     # Calibrated geometry + calculation results API
-    # 200x400 px at ScaleX=ScaleY=20 => 10x20 FT = 200 SQ FT
     calcs_resp = client.get(f"/api/v1/formulas/calculations/?project_version__project={proj_id}")
     assert calcs_resp.status_code == 200
     qty_calc = next(r for r in calcs_resp.data["results"] if r["property_name"] == "Qty")
@@ -240,30 +241,30 @@ def test_ai_layer_has_zero_extraction_engine_imports() -> None:
 
 @pytest.mark.django_db
 @pytest.mark.skipif(not PROJECT_4_PATH.exists(), reason="Real project 4.SwiftJob.zip not present.")
-def test_end_to_end_real_project4_extraction_idempotency_estimation_exports_and_ai() -> None:
-    client, user = _auth_client("lead_est@vortexen.test")
-    org_resp = client.post("/api/v1/organizations/", {"name": "Marina Engineering", "slug": "marina-eng"}, format="json")
-    org_id = org_resp.data["id"]
-
-    proj_resp = client.post("/api/v1/projects/", {"organization": org_id, "name": "project 4"}, format="json")
+def test_end_to_end_real_project4_extraction_idempotency_estimation_exports_and_ai(tmp_path: Path, settings) -> None:
+    settings.EXTRACTION_WORK_DIR = tmp_path / "work"
+    client, _user, org = _cookie_admin_client("lead_est@vortexen.test", "Marina Engineering", "marina-eng")
+    proj_resp = client.post("/api/v1/projects/", {"organization": str(org.id), "name": "project 4"}, format="json")
     assert proj_resp.status_code == 201
     project_id = proj_resp.data["id"]
 
-    bad_src = client.post("/api/v1/project-sources/", {"project": project_id, "source_path": "C:\\Windows\\win.ini"}, format="json")
-    assert bad_src.status_code == 400
+    # Direct server-path registration disabled (405)
+    assert client.post("/api/v1/project-sources/", {"project": project_id, "source_path": str(PROJECT_4_PATH)}, format="json").status_code == 405
 
-    src_resp = client.post(
-        "/api/v1/project-sources/",
-        {"project": project_id, "source_path": str(PROJECT_4_PATH)},
-        format="json",
-    )
+    with PROJECT_4_PATH.open("rb") as fh:
+        src_resp = client.post(
+            "/api/v1/project-sources/upload/",
+            {"project": project_id, "file": fh, "auto_extract": "false"},
+            format="multipart",
+        )
     assert src_resp.status_code == 201
-    assert "source_path" not in src_resp.data
-    assert src_resp.data["container_format"] == "pkzip_swiftjob"
-    assert src_resp.data["manifest_summary"]["total_entries"] == 325
-    assert src_resp.data["manifest_summary"]["raster_entry_count"] == 324
+    src_data = src_resp.data["source"]
+    assert "source_path" not in src_data
+    assert src_data["container_format"] == "pkzip_swiftjob"
+    assert src_data["manifest_summary"]["total_entries"] == 325
+    assert src_data["manifest_summary"]["raster_entry_count"] == 324
 
-    run1 = client.post("/api/v1/extraction/", {"project": project_id, "project_source": src_resp.data["id"]}, format="json")
+    run1 = client.post("/api/v1/extraction/", {"project": project_id, "project_source": src_data["id"]}, format="json")
     assert run1.status_code == 201
     assert run1.data["status"] == "COMPLETED"
     assert run1.data["summary"]["objects_extracted"] == 1461
@@ -276,7 +277,7 @@ def test_end_to_end_real_project4_extraction_idempotency_estimation_exports_and_
     assert MeasurementPoint.objects.count() == 4868
 
     # Idempotency check
-    run2 = client.post("/api/v1/extraction/", {"project": project_id, "project_source": src_resp.data["id"]}, format="json")
+    run2 = client.post("/api/v1/extraction/", {"project": project_id, "project_source": src_data["id"]}, format="json")
     assert run2.status_code == 201
     assert run2.data["status"] == "COMPLETED"
     assert ProjectObject.objects.count() == 1461
@@ -309,7 +310,7 @@ def test_end_to_end_real_project4_extraction_idempotency_estimation_exports_and_
         assert exp.status_code == 200
         assert len(exp.content) > 100
 
-    # Standalone formula calculation & AI query verification (NO COM required!)
+    # Standalone formula calculation & AI query verification (Admin only)
     ai_resp = client.post(
         "/api/v1/ai/query/",
         {"project_id": project_id, "question": "What is the quantity of Duct 350x200mm?"},

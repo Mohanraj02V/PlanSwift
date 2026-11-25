@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from django.urls import path
-from rest_framework import generics, serializers, status
+from rest_framework import generics, permissions, serializers, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.knowledge_base.models import KnowledgeChunk, KnowledgeDocument
-from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import IsOrgEditor, get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids, is_admin
 from apps.projects.models import Project
 from apps.retrieval.models import RetrievalRecord
 from apps.retrieval.services import HybridRetrievalService, compute_term_weights
@@ -20,17 +20,16 @@ class KnowledgeDocumentSerializer(serializers.ModelSerializer):
 
 
 class KnowledgeDocumentListCreateView(generics.ListCreateAPIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
     serializer_class = KnowledgeDocumentSerializer
 
     def get_queryset(self):
-        return KnowledgeDocument.objects.filter(organization_id__in=get_user_org_ids(self.request.user))
+        return KnowledgeDocument.objects.filter(organization_id__in=get_user_admin_org_ids(self.request.user))
 
     def perform_create(self, serializer):
         org = serializer.validated_data["organization"]
-        if not OrganizationMember.objects.filter(
-            organization=org, user=self.request.user, is_active=True, role__in=IsOrgEditor.ALLOWED_ROLES
-        ).exists():
-            raise PermissionError("Forbidden")
+        if not is_admin(self.request.user, org):
+            raise PermissionDenied("Organization Admin privileges required.")
         doc = serializer.save()
         chunks = [p.strip() for p in doc.content.split("\n\n") if p.strip()] or [doc.content]
         KnowledgeChunk.objects.bulk_create(
@@ -42,10 +41,12 @@ class KnowledgeDocumentListCreateView(generics.ListCreateAPIView):
 
 
 class RetrievalPreviewView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
+
     def post(self, request):
         project_id = request.data.get("project_id")
         query = request.data.get("query", "")
-        org_ids = get_user_org_ids(request.user)
+        org_ids = get_user_admin_org_ids(request.user)
         project = Project.objects.filter(id=project_id, organization_id__in=org_ids).first()
         if not project:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -53,6 +54,8 @@ class RetrievalPreviewView(APIView):
 
 
 class RetrievalLogListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
+
     class _Ser(serializers.ModelSerializer):
         class Meta:
             model = RetrievalRecord
@@ -61,7 +64,7 @@ class RetrievalLogListView(generics.ListAPIView):
     serializer_class = _Ser
 
     def get_queryset(self):
-        return RetrievalRecord.objects.filter(project__organization_id__in=get_user_org_ids(self.request.user))
+        return RetrievalRecord.objects.filter(project__organization_id__in=get_user_admin_org_ids(self.request.user))
 
 
 urlpatterns = [

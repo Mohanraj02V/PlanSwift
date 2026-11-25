@@ -39,7 +39,11 @@ node_modules/
 frontend/.next/
 frontend/out/
 frontend/coverage/
+*.tsbuildinfo
 npm-debug.log*
+
+# Sample / test CAD fixtures
+sample_cad_files/
 
 # Legacy COM dev oracle snapshots
 com_*.json

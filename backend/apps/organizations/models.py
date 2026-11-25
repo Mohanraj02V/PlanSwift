@@ -34,18 +34,14 @@ class Organization(models.Model):
 
 class OrganizationMember(models.Model):
     class Role(models.TextChoices):
-        OWNER = "owner", "Owner"
         ADMIN = "admin", "Admin"
         ESTIMATOR = "estimator", "Estimator"
-        REVIEWER = "reviewer", "Reviewer"
-        VIEWER = "viewer", "Viewer"
-        ESTIMATION_ONLY = "estimation_only", "Estimation Only"
-        CONNECTOR_AGENT = "connector_agent", "Connector Agent"
+        USER = "user", "User"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="members")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="organization_memberships")
-    role = models.CharField(max_length=32, choices=Role.choices, default=Role.ESTIMATOR)
+    role = models.CharField(max_length=32, choices=Role.choices, default=Role.USER)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
 

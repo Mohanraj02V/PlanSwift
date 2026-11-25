@@ -24,13 +24,17 @@ User = get_user_model()
 def test_dxf_and_ifc_upload_persistence_cad_bim_apis_exports_and_rbac(tmp_path: Path) -> None:
     org = Organization.objects.create(name="CAD Org", slug="cad-org")
     other_org = Organization.objects.create(name="Other CAD Org", slug="other-cad-org")
-    user = User.objects.create_user(email="cad@vortexen.local", password="StrongPassword123!")
+    admin_user = User.objects.create_user(email="cad_admin@vortexen.local", password="StrongPassword123!")
+    estimator = User.objects.create_user(email="cad@vortexen.local", password="StrongPassword123!")
     outsider = User.objects.create_user(email="outsider_cad@vortexen.local", password="StrongPassword123!")
-    OrganizationMember.objects.create(organization=org, user=user, role="estimator")
+    OrganizationMember.objects.create(organization=org, user=admin_user, role="admin")
+    OrganizationMember.objects.create(organization=org, user=estimator, role="estimator")
     OrganizationMember.objects.create(organization=other_org, user=outsider, role="estimator")
 
-    client = APIClient()
-    client.force_authenticate(user=user)
+    admin_client = APIClient()
+    admin_client.force_authenticate(user=admin_user)
+    est_client = APIClient()
+    est_client.force_authenticate(user=estimator)
 
     # 1. Create DXF & IFC test files
     dxf_path = tmp_path / "floor.dxf"
@@ -58,15 +62,15 @@ def test_dxf_and_ifc_upload_persistence_cad_bim_apis_exports_and_rbac(tmp_path: 
     ifcopenshell.api.run("pset.edit_qto", model, qto=qto, properties={"NetVolume": 2.95})
     model.write(str(ifc_path))
 
-    # 2. Reject invalid file disguised as .dxf
-    p_dxf = client.post("/api/v1/projects/", {"organization": str(org.id), "name": "DXF Proj"}, format="json").json()["id"]
+    # 2. Admin creates projects; Estimator uploads DXF (invalid file rejected with 400)
+    p_dxf = admin_client.post("/api/v1/projects/", {"organization": str(org.id), "name": "DXF Proj"}, format="json").json()["id"]
     bad_upload = SimpleUploadedFile("bad.dxf", b"not a real dxf", content_type="application/octet-stream")
-    r_bad = client.post("/api/v1/project-sources/upload/", {"project": p_dxf, "file": bad_upload}, format="multipart")
+    r_bad = est_client.post("/api/v1/project-sources/upload/", {"project": p_dxf, "file": bad_upload}, format="multipart")
     assert r_bad.status_code == 400
 
-    # 3. Upload real DXF & verify CADDocument / CADLayer / CADEntity + Export
+    # 3. Upload real DXF as Estimator & verify CADDocument / CADLayer / CADEntity; Admin exports JSON
     dxf_upload = SimpleUploadedFile("floor.dxf", dxf_path.read_bytes(), content_type="application/dxf")
-    r_up_dxf = client.post(
+    r_up_dxf = est_client.post(
         "/api/v1/project-sources/upload/",
         {"project": p_dxf, "file": dxf_upload, "auto_extract": "true"},
         format="multipart",
@@ -78,21 +82,22 @@ def test_dxf_and_ifc_upload_persistence_cad_bim_apis_exports_and_rbac(tmp_path: 
     assert CADLayer.objects.filter(cad_document__project_version__project_id=p_dxf, name="A-WALL").exists()
     assert CADEntity.objects.filter(cad_document__project_version__project_id=p_dxf).count() == 2
 
-    r_docs = client.get(f"/api/v1/cad-bim/documents/?project_version__project={p_dxf}")
+    r_docs = est_client.get(f"/api/v1/cad-bim/documents/?project_version__project={p_dxf}")
     assert r_docs.status_code == 200 and r_docs.json()["count"] == 1
-    r_ents = client.get(f"/api/v1/cad-bim/entities/?cad_document__project_version__project={p_dxf}")
+    r_ents = est_client.get(f"/api/v1/cad-bim/entities/?cad_document__project_version__project={p_dxf}")
     assert r_ents.status_code == 200 and r_ents.json()["count"] == 2
 
-    r_exp = client.get(f"/api/v1/exports/{p_dxf}/?export_format=json")
+    assert est_client.get(f"/api/v1/exports/{p_dxf}/?export_format=json").status_code == 403
+    r_exp = admin_client.get(f"/api/v1/exports/{p_dxf}/?export_format=json")
     assert r_exp.status_code == 200
     exp_json = json.loads(r_exp.content.decode("utf-8"))
     assert exp_json["cad_document"]["source_format"] == "dxf_ascii"
     assert len(exp_json["cad_document"]["cad_entities"]) == 2
 
-    # 4. Upload IFC with extract_geometry=true & verify BIMElement native Qto vs calculated 3D volume
-    p_ifc = client.post("/api/v1/projects/", {"organization": str(org.id), "name": "IFC Proj"}, format="json").json()["id"]
+    # 4. Upload IFC with extract_geometry=true as Estimator & verify BIMElement native Qto vs calculated 3D volume
+    p_ifc = admin_client.post("/api/v1/projects/", {"organization": str(org.id), "name": "IFC Proj"}, format="json").json()["id"]
     ifc_upload = SimpleUploadedFile("building.ifc", ifc_path.read_bytes(), content_type="application/octet-stream")
-    r_up_ifc = client.post(
+    r_up_ifc = est_client.post(
         "/api/v1/project-sources/upload/",
         {"project": p_ifc, "file": ifc_upload, "auto_extract": "true", "extract_geometry": "true"},
         format="multipart",
@@ -101,7 +106,7 @@ def test_dxf_and_ifc_upload_persistence_cad_bim_apis_exports_and_rbac(tmp_path: 
     assert r_up_ifc.json()["source"]["source_format"] == "ifc_step"
     assert BIMElement.objects.filter(cad_document__project_version__project_id=p_ifc, ifc_class="IfcWall").count() == 1
 
-    r_bims = client.get(f"/api/v1/cad-bim/elements/?cad_document__project_version__project={p_ifc}&ifc_class=IfcWall")
+    r_bims = est_client.get(f"/api/v1/cad-bim/elements/?cad_document__project_version__project={p_ifc}&ifc_class=IfcWall")
     assert r_bims.status_code == 200
     w_el = r_bims.json()["results"][0]
     assert w_el["geometry_summary_json"]["status"] == "calculated"
@@ -118,13 +123,12 @@ def test_dxf_and_ifc_upload_persistence_cad_bim_apis_exports_and_rbac(tmp_path: 
 @pytest.mark.django_db
 def test_cad_bim_zip_bundle_upload_extracts_all_dxf_and_ifc_files_and_rejects_zip_slip(tmp_path: Path) -> None:
     org = Organization.objects.create(name="Bundle Org", slug="bundle-org")
-    user = User.objects.create_user(email="bundle@vortexen.local", password="StrongPassword123!")
-    OrganizationMember.objects.create(organization=org, user=user, role="estimator")
+    admin_user = User.objects.create_user(email="bundle@vortexen.local", password="StrongPassword123!")
+    OrganizationMember.objects.create(organization=org, user=admin_user, role="admin")
 
     client = APIClient()
-    client.force_authenticate(user=user)
+    client.force_authenticate(user=admin_user)
 
-    # Create two DXF files (ASCII + Binary) and one IFC file inside a starter-pack style ZIP
     dxf_ascii = tmp_path / "01_basic.dxf"
     d1 = ezdxf.new("R2018")
     d1.modelspace().add_line((0, 0), (10, 0))
@@ -173,7 +177,6 @@ def test_cad_bim_zip_bundle_upload_extracts_all_dxf_and_ifc_files_and_rejects_zi
     doc_names = {d["source_name"] for d in r_docs.json()["results"]}
     assert doc_names == {"01_basic.dxf", "02_binary.dxf", "03_model.ifc"}
 
-    # Verify Zip Slip traversal inside a CAD bundle is strictly rejected with 400
     evil_zip = tmp_path / "evil_bundle.zip"
     with zipfile.ZipFile(evil_zip, "w") as zf:
         zf.writestr("../escape.dxf", "0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n")

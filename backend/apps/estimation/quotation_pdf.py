@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -106,8 +107,26 @@ def default_quotation_metadata(session) -> dict[str, Any]:
     return defaults
 
 
+OFFICIAL_VORTEXEN_MARK_PATH = Path(__file__).resolve().parent / "assets" / "vortexen-mark.png"
+
+
 def _draw_v_ribbon(c: canvas.Canvas, x: float, y: float, size: float, watermark: bool = False) -> None:
-    """Draw the signature Vortexen interlocking blue/cyan V emblem in pure vector graphics."""
+    """Render official Vortexen V-diamond emblem (PNG mark in header, subtle vector watermark in body)."""
+    if not watermark and OFFICIAL_VORTEXEN_MARK_PATH.exists():
+        try:
+            c.drawImage(
+                str(OFFICIAL_VORTEXEN_MARK_PATH),
+                x,
+                y + 2,
+                width=size,
+                height=size * 0.88,
+                mask="auto",
+                preserveAspectRatio=True,
+                anchor="c",
+            )
+            return
+        except Exception:
+            pass
     c.saveState()
     if watermark:
         navy = colors.Color(0.84, 0.94, 0.99, alpha=0.55)

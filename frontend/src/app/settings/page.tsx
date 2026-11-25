@@ -66,7 +66,7 @@ export default function SettingsPage() {
             onChange={(e) => setNewPassword(e.target.value)}
             className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
           />
-          <button type="submit" className="rounded bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white">
+          <button type="submit" className="rounded-lg bg-[#0052cc] px-4 py-2 text-xs font-semibold text-white hover:bg-[#003d99]">
             Update Password
           </button>
         </form>

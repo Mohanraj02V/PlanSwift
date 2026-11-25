@@ -7,7 +7,7 @@ import json
 from django.http import HttpResponse
 from django.urls import path
 from openpyxl import Workbook
-from rest_framework import status
+from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -25,17 +25,19 @@ from apps.formulas.models import Formula
 from apps.geometry.models import GeometryFeature
 from apps.object_hierarchy.models import ObjectRelationship
 from apps.object_model.models import ProjectObject
-from apps.permissions.rbac import get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids
 from apps.projects.models import Project, ProjectPage
 from apps.validation.models import ValidationResult
 
 
 class ProjectExportView(APIView):
-    """Stream versioned JSON, JSONL, CSV, XLSX, or GeoJSON directly from persisted canonical records."""
+    """Stream versioned JSON, JSONL, CSV, XLSX, or GeoJSON directly from persisted canonical records (Admin only)."""
+
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
 
     def get(self, request, project_id):
         fmt = request.query_params.get("export_format", "json").lower()
-        org_ids = get_user_org_ids(request.user)
+        org_ids = get_user_admin_org_ids(request.user)
         project = Project.objects.filter(id=project_id, organization_id__in=org_ids).select_related("organization").first()
         if not project:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)

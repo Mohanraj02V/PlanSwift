@@ -1,26 +1,39 @@
-const TOKEN_ACCESS_KEY = "vortexen_access_token";
-const TOKEN_REFRESH_KEY = "vortexen_refresh_token";
+import { API_BASE_URL } from "@/services/api-client/client";
 
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_ACCESS_KEY);
-}
-
-export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_REFRESH_KEY);
-}
-
-export function setAuthTokens(access: string, refresh?: string): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(TOKEN_ACCESS_KEY, access);
-  if (refresh) {
-    window.localStorage.setItem(TOKEN_REFRESH_KEY, refresh);
+export function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const cookies = document.cookie ? document.cookie.split(";") : [];
+  for (const raw of cookies) {
+    const idx = raw.indexOf("=");
+    if (idx === -1) continue;
+    const name = raw.slice(0, idx).trim();
+    if (name === "csrftoken") {
+      return decodeURIComponent(raw.slice(idx + 1).trim());
+    }
   }
+  return null;
 }
 
-export function clearAuthTokens(): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(TOKEN_ACCESS_KEY);
-  window.localStorage.removeItem(TOKEN_REFRESH_KEY);
+let csrfPromise: Promise<string | null> | null = null;
+
+export async function ensureCsrfCookie(): Promise<string | null> {
+  const existing = getCsrfToken();
+  if (existing) return existing;
+  if (csrfPromise) return csrfPromise;
+  csrfPromise = (async () => {
+    try {
+      const resp = await fetch(`${API_BASE_URL}/auth/csrf/`, {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json().catch(() => ({}));
+      return getCsrfToken() || (typeof data?.csrfToken === "string" ? data.csrfToken : null);
+    } catch {
+      return null;
+    } finally {
+      csrfPromise = null;
+    }
+  })();
+  return csrfPromise;
 }

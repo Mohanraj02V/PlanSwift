@@ -11,14 +11,21 @@ vi.mock("@/hooks/useProjectContext", () => ({
   useProjectContext: () => ({ refreshContext: vi.fn() }),
 }));
 
-describe("LoginPage validation", () => {
+describe("LoginPage validation & org-only access", () => {
   it("validates invalid email format via Zod before sending API calls", async () => {
     render(<LoginPage />);
-    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: "invalid-email" } });
-    fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText(/Work Email/i), { target: { value: "invalid-email" } });
+    fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: /Sign In/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/valid email/i);
     });
+  });
+
+  it("does not render any public registration or self-signup controls", () => {
+    render(<LoginPage />);
+    expect(screen.queryByRole("button", { name: /register/i })).toBeNull();
+    expect(screen.queryByText(/Create Estimator Account/i)).toBeNull();
+    expect(screen.getByText(/Self-registration is disabled/i)).toBeInTheDocument();
   });
 });

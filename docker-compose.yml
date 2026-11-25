@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: vortexen
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vortexen_dev_password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,12 +18,26 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: python manage.py migrate --noinput
+    restart: "no"
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgresql://vortexen:${POSTGRES_PASSWORD:-vortexen_dev_password}@postgres:5432/vortexen_estimator
+      SECRET_KEY: ${SECRET_KEY:-dev-docker-secret-key-replace-in-production-50chars}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   backend:
     build:
@@ -36,16 +50,16 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       EXTRACTION_EXECUTION_MODE: celery
+      EXTRACTION_WORK_DIR: /data/uploads
       IFC_GEOMETRY_THREADS: "2"
-      ALLOWED_SOURCE_ROOTS: /data/planswift_sources
       SECRET_KEY: ${SECRET_KEY:-dev-docker-secret-key-replace-in-production-50chars}
     volumes:
-      - ${PLANSWIFT_SOURCE_DIR:-./sources}:/data/planswift_sources:ro
+      - uploads_data:/data/uploads
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -65,13 +79,14 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       EXTRACTION_EXECUTION_MODE: celery
+      EXTRACTION_WORK_DIR: /data/uploads
       IFC_GEOMETRY_THREADS: "2"
-      ALLOWED_SOURCE_ROOTS: /data/planswift_sources
+      SECRET_KEY: ${SECRET_KEY:-dev-docker-secret-key-replace-in-production-50chars}
     volumes:
-      - ${PLANSWIFT_SOURCE_DIR:-./sources}:/data/planswift_sources:ro
+      - uploads_data:/data/uploads
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -89,3 +104,4 @@ services:
 
 volumes:
   pg_data:
+  uploads_data:

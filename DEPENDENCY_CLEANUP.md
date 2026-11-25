@@ -1,52 +1,33 @@
-# Dependency Cleanup Report (`DEPENDENCY_CLEANUP.md`)
+# Dependency & Code Cleanup Report (`DEPENDENCY_CLEANUP.md`)
 
 ## 1. Objective
 
-Ensure **Vortexen Estimator** runs on Linux or Windows containers without PlanSwift Desktop, PlanSwift DLLs, COM/ActiveX, Windows registry access, OCR engines, computer vision libraries, raster image decoders for extraction, or development tooling in production images.
+Ensure **Vortexen Estimator** runs cleanly across Linux/Windows Docker containers and production environments without obsolete PlanSwift Desktop live-sync/COM code, direct server-path ingestion loopholes, dev-only test dependencies in runtime images, or browser-exposed JWT tokens.
 
 ---
 
-## 2. Removed Dependencies & Packages
+## 2. Removed Obsolete Features, Configs & Dependencies
 
-| Artifact / Dependency | Previous Usage | Removal Rationale | Replacement |
+| Artifact / Config / Dependency | Previous Usage | Action Taken | Replacement |
 | :--- | :--- | :--- | :--- |
-| `windows_connector/` (.NET / C# COM binary) | Queried PlanSwift 11 COM objects on Windows | Violates PlanSwift-free standalone requirement | Standalone ZIP/XML + AST Formula & Geometry Engines |
-| `defusedxml>=0.7.1` | Used only in `extraction_engine/parsers/geometry_parser.py` (`fromstring`) while `xml_parser.py` & `archive_parser.py` already used hardened `lxml.etree` | Redundant XML parser dependency across engine and backend | `lxml.etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)` + explicit `<!DOCTYPE`/`<!ENTITY` guard |
-| `pytest`, `pytest-django` in `backend/requirements.txt` | Shipped inside production Docker container (`backend/Dockerfile`) | Unnecessary dev test runner in production images | Split into `backend/requirements-dev.txt` (`-r requirements.txt`) |
-| `winreg` (`version_detector.py`) | Queried `HKEY_CLASSES_ROOT\PlanSwift*` | Windows-only PlanSwift COM discovery | Removed (`extraction_engine/adapters/planswift_version_adapters/` deleted) |
-| `CONNECTOR_SHARED_TOKEN`, `CONNECTOR_REQUIRE_TLS` | `.env.example`, `backend/config/settings/base.py`, `docker-compose.prod.yml` | Unused COM connector auth secrets | Removed cleanly |
+| `CONNECTOR_REQUIRE_TLS` | `production.py`, `staging.py` | Removed obsolete COM connector flag | Standard TLS 1.2/1.3 HTTPS (`SECURE_SSL_REDIRECT`, HSTS) |
+| `COM_SNAPSHOT` (`ProjectSource.SourceKind`) & `PLANSWIFT_COM` (`ExternalIntegration.kind` comment) | Legacy COM snapshot source markers | Removed via `project_sources.0003` migration & model cleanup (`com_snapshot.json` kept strictly as an offline regression oracle fixture) | Uploaded `.SwiftJob.zip` / `.zip` / `.xml` / `.dxf` / `.ifc` sources |
+| Server-path API ingestion (`POST /api/v1/project-sources/`, `PLANSWIFT_DEFAULT_SOURCE_PATH`, `./sources` host mount) | Allowed probing configured host paths via API & mounted host `./sources` in Compose | Disabled `ProjectSourceViewSet.create` (`405`), removed "Import Pre-Staged Server Archive" UI card, removed `PLANSWIFT_DEFAULT_SOURCE_PATH` & `./sources` Compose mounts | Browser multipart streaming `POST /api/v1/project-sources/upload/` into private `uploads_data` volume |
+| Public self-signup (`RegisterView`, `registerSchema`, `/login` Register tab) | Open account creation & default unprivileged viewer role | Disabled `POST /api/v1/auth/register/` (`403` + audit event), removed frontend signup tab & `registerSchema` | Admin-only user creation in `/users` (`/api/v1/auth/users/`) |
+| Legacy 7-role choices (`owner`, `reviewer`, `viewer`, `estimation_only`, `connector_agent`) | Complex overlapping RBAC & permission leakage (`is_staff` bypass) | Consolidated via non-destructive migration (`organizations.0003` + `0004`) to `admin`, `estimator`, `user` | Centralized `backend/apps/permissions/rbac.py` & `frontend/src/lib/rbac.ts` |
+| `frontend/tsconfig.tsbuildinfo` & hardcoded dev seed password | Untracked TS build cache; hardcoded default admin secret in `seed_demo_and_extract.py` | Deleted `.tsbuildinfo`, ignored in `.gitignore`, gated `seed_demo_and_extract.py` strictly behind `DEBUG=True` + explicit password arg | Clean source tree & explicit env/CLI secrets |
 
 ---
 
 ## 3. Retained Production Dependencies Audit
 
-### Extraction Engine (`extraction_engine/pyproject.toml`)
-| Package | Dependent Modules | Purpose | Production Needed? |
-| :--- | :--- | :--- | :--- |
-| `pydantic>=2.9.0` | `core/extraction_result.py`, `core/source_manifest.py` | Strict Canonical Data Model validation & serialization | **Yes** |
-| `lxml>=5.3.0` | `parsers/xml_parser.py`, `parsers/archive_parser.py`, `parsers/geometry_parser.py` | Streaming `iterparse` for multi-MB `XMLData.XML` under low memory + XXE hardening | **Yes** (stdlib `xml.etree` lacks `huge_tree`/`no_network` & fast C `iterparse` cleanup) |
-| `openpyxl>=3.1.5` | `exporters/tabular_exporter.py` | Multi-sheet native Excel (`.xlsx`) workbook generation | **Yes** |
-
-### Django Backend (`backend/requirements.txt`)
-| Package | Dependent Modules | Purpose |
-| :--- | :--- | :--- |
-| `Django`, `djangorestframework`, `djangorestframework-simplejwt`, `django-cors-headers`, `django-filter`, `drf-spectacular` | Core REST API, JWT auth, OpenAPI schema, filtering | **Yes** |
-| `celery`, `redis` | `backend/config/celery.py`, `apps/background_jobs/tasks.py`, `docker-compose*.yml` | Async extraction task execution in production | **Yes** |
-| `psycopg[binary]`, `whitenoise`, `gunicorn` | Production PostgreSQL driver, static serving, WSGI server | **Yes** |
-| `httpx` | `apps/ai_providers/services.py` | Optional OpenAI-compatible AI assistant HTTP client | **Yes** (strictly isolated in AI layer) |
-
-### Frontend (`frontend/package.json`)
-| Package | Verified Imports | Purpose |
-| :--- | :--- | :--- |
-| `next`, `react`, `react-dom` | All pages & components | App Router React SSR/CSR UI |
-| `lucide-react` | `components/layout/AppShell.tsx` | Minimal vector UI icons |
-| `zod` | `package.json` validation utility | Runtime schema safety (dev/runtime minimal footprint; total prod deps = 5) |
+- **Extraction Engine (`extraction_engine/pyproject.toml`)**: `pydantic`, `lxml`, `openpyxl`, `ezdxf`, `ifcopenshell`, `psutil`.
+- **Django Backend (`backend/requirements.txt`)**: `Django`, `djangorestframework`, `djangorestframework-simplejwt`, `django-cors-headers`, `django-filter`, `drf-spectacular`, `pydantic`, `lxml`, `celery`, `redis`, `psycopg[binary]`, `openpyxl`, `reportlab`, `httpx`, `whitenoise`, `gunicorn`, `ezdxf`, `ifcopenshell`, `psutil`.
+- **Dev/Test Only (`backend/requirements-dev.txt`)**: `pytest`, `pytest-django` (excluded from production Docker images).
+- **Frontend (`frontend/package.json`)**: `next`, `react`, `react-dom`, `lucide-react`, `zod` (prod); `vitest`, `@testing-library/react`, `typescript`, `tailwindcss` (dev).
 
 ---
 
-## 4. Prohibited Dependency Verification
+## 4. Prohibited Dependency & Security Verification
 
-AST static analysis across **every `.py` file** under `extraction_engine/` and `backend/` (enforced by `test_standalone_security_no_com_no_ocr_no_eval_across_codebase` in `extraction_engine/tests/test_standalone_regression_and_accuracy.py`) confirms **zero imports** of:
-- COM / Windows: `winreg`, `win32com`, `pythoncom`, `comtypes`, `apps.planswift_connector`, `planswift_com`, `planswift_version_adapters`
-- OCR / Vision / Image / PDF libs: `pytesseract`, `easyocr`, `cv2`, `PIL`, `pdf2image`, `pypdf`, `fitz`, `ultralytics`, `torch`, `tensorflow`
-- Unsafe code execution: **zero calls** to `eval()` or `exec()`.
+AST static analysis across every `.py` file under `extraction_engine/` and `backend/` (enforced by `test_standalone_security_no_com_no_ocr_no_eval_across_codebase` in `extraction_engine/tests/test_standalone_regression_and_accuracy.py`) confirms zero direct imports of COM/Windows libs (`winreg`, `win32com`, `pythoncom`, `comtypes`), zero OCR/CV libs (`pytesseract`, `easyocr`, `cv2`, `PIL`, `pdf2image`, `pypdf`, `fitz`), and zero `eval()`/`exec()` calls.

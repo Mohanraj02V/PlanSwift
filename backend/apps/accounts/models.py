@@ -35,6 +35,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     job_title = models.CharField(max_length=120, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    token_version = models.PositiveIntegerField(default=1)
+    must_change_password = models.BooleanField(default=False)
     mfa_enabled = models.BooleanField(default=False)
     mfa_secret_ref = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(default=timezone.now)

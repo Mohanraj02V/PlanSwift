@@ -1,1 +1,1 @@
-"""PlanSwift source adapters (native SwiftJob package, XML stream, COM payload, version detection)."""
+"""Source adapters (native PlanSwift SwiftJob package, PlanSwift XML stream, DXF ezdxf, IFC IfcOpenShell, version detection)."""

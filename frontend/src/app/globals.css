@@ -2,7 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --vortexen-primary: #0052cc;
+  --vortexen-primary-hover: #003d99;
+  --vortexen-primary-light: #2684ff;
+  --vortexen-cyan: #29a9ea;
+  --vortexen-navy: #0b111e;
+  --vortexen-ink: #0f172a;
+  --vortexen-text-secondary: #475569;
+  --vortexen-text-muted: #64748b;
+  --vortexen-border: #e2e8f0;
+  --vortexen-surface-soft: #f8fafc;
+  --vortexen-accent: #e85e15;
+}
+
 body {
-  background-color: #f8fafc;
-  color: #0f172a;
+  background-color: var(--vortexen-surface-soft);
+  color: var(--vortexen-ink);
+  font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Crisp custom scrollbars for data-dense CAD/BIM/Takeoff tables */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

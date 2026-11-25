@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from django.urls import path
-from rest_framework import generics, serializers, status
+from rest_framework import generics, permissions, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai_agents.services import EstimationQAAgent
 from apps.ai_assistant.models import AIConversation, AIMessage
 from apps.audit_logs.services import log_audit_event
-from apps.permissions.rbac import get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids
 from apps.projects.models import Project
 
 
@@ -35,10 +35,12 @@ class AIConversationSerializer(serializers.ModelSerializer):
 
 
 class AIQueryView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
+
     def post(self, request):
         ser = AIQuerySerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        org_ids = get_user_org_ids(request.user)
+        org_ids = get_user_admin_org_ids(request.user)
         project = Project.objects.filter(id=ser.validated_data["project_id"], organization_id__in=org_ids).select_related("organization").first()
         if not project:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -79,11 +81,12 @@ class AIQueryView(APIView):
 
 
 class AIConversationListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
     serializer_class = AIConversationSerializer
     filterset_fields = ["project"]
 
     def get_queryset(self):
-        org_ids = get_user_org_ids(self.request.user)
+        org_ids = get_user_admin_org_ids(self.request.user)
         return AIConversation.objects.filter(project__organization_id__in=org_ids, user=self.request.user).prefetch_related("messages")
 
 

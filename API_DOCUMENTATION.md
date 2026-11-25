@@ -1,34 +1,28 @@
-# API_DOCUMENTATION.md — REST API Reference (`/api/v1/`)
+# API_DOCUMENTATION.md — REST API Reference & Role Matrix (`/api/v1/`)
 
-All endpoints return JSON and enforce JWT Bearer authentication (except `/api/v1/health/`, `/api/v1/auth/login/`, `/api/v1/auth/register/`, `/api/v1/auth/refresh/`). Interactive OpenAPI documentation is served at `/api/schema/` and `/api/docs/`.
+All endpoints return JSON (except binary downloads) and authenticate via HttpOnly JWT cookies (`vortexen_access` / `vortexen_refresh`) + `X-CSRFToken` on unsafe methods (or `Authorization: Bearer` for programmatic clients). OpenAPI schema endpoints (`/api/schema/`, `/api/docs/`) are disabled in production (`ENABLE_API_DOCS=false`) and restricted exclusively to active Organization Admins when enabled.
 
-## Endpoint Catalog
+## Three-Role Access Matrix
 
-| Prefix | Methods | Purpose |
-|---|---|---|
-| `/api/v1/health/` | `GET` | Liveness + DB readiness probe |
-| `/api/v1/auth/` | `POST` / `GET` / `PATCH` | `login/`, `refresh/`, `logout/` (token blacklist), `register/`, `me/`, `change-password/` |
-| `/api/v1/organizations/` | `GET`, `POST`, `PATCH`, `DELETE` | Multi-tenant org management & `<id>/members/` RBAC roster |
-| `/api/v1/projects/` | `GET`, `POST`, `PATCH`, `DELETE` | Project lifecycle & `<id>/pages/` paginated page listing |
-| `/api/v1/project-sources/` | `GET`, `POST` | Register & manifest-inspect local `PLANSWIFT_SOURCE_PATH` archives |
-| `/api/v1/source-inventory/` | `GET` | Query inventoried archive files (`XMLData.XML` + `.tiff` entries) |
-| `/api/v1/planswift/` | `GET`, `POST` | `environment/`, `ingest/` (Windows COM JSON snapshot receiver), `batches/` |
-| `/api/v1/extraction/` | `GET`, `POST` | Trigger extraction runs, poll stage events/errors, `<id>/cancel/` |
-| `/api/v1/objects/` | `GET` | Search/filter canonical `ProjectObject`s & retrieve full properties |
-| `/api/v1/hierarchy/` | `GET` | `tree/<project_id>/` (depth/parent traversal) & `relationships/` |
-| `/api/v1/measurements/` | `GET` | Measurements (`/`), measurement sections (`sections/`) |
-| `/api/v1/geometry/` | `GET` | Geometry features (`/`) & detailed `<id>/` coordinate point arrays |
-| `/api/v1/formulas/` | `GET` | Formula expressions, PascalScript filter, cycle flags & dependency edges |
-| `/api/v1/classifications/` | `GET` | Native WBS & normalized/inferred classifications |
-| `/api/v1/assemblies/` | `GET` | Native assemblies and nested components |
-| `/api/v1/components/` | `GET` | Component items |
-| `/api/v1/annotations/` | `GET` | Annotations & markups |
-| `/api/v1/validation/` | `GET` | Validation scorecards & field-level check matrix |
-| `/api/v1/reconciliation/` | `GET` | COM-vs-Package reconciliation reports |
-| `/api/v1/estimation/sessions/` | `GET`, `POST` | Generate deterministic SQL estimation rollups & `<id>/approve/` |
-| `/api/v1/exports/<project_id>/` | `GET` | Download `?export_format=json|jsonl|csv|xlsx|geojson` |
-| `/api/v1/integrations/denotations/` | `GET` | SwiftExcel link tokens, Item #, Cost Code, GroupId |
-| `/api/v1/ai/` | `POST`, `GET` | `query/` (provenance-cited estimation Q&A) & `conversations/` |
-| `/api/v1/retrieval/` | `POST`, `GET` | `preview/`, `logs/`, `knowledge/` (engineering reference docs) |
-| `/api/v1/audit/` | `GET` | Append-only tenant-scoped audit trail |
-| `/api/v1/notifications/` | `GET` | User & org extraction notifications |
+| Endpoint Prefix | Methods | Admin | Estimator | User |
+|---|---|---|---|---|
+| `/api/v1/health/` | `GET` | AllowAny | AllowAny | AllowAny |
+| `/api/v1/auth/csrf/`, `/auth/login/`, `/auth/refresh/` | `GET` / `POST` | AllowAny (throttled) | AllowAny (throttled) | AllowAny (throttled) |
+| `/api/v1/auth/register/` | `POST` | **403 Disabled** | **403 Disabled** | **403 Disabled** |
+| `/api/v1/auth/logout/`, `/auth/me/`, `/auth/change-password/` | `GET`/`PATCH`/`POST` | Allowed | Allowed | Allowed |
+| `/api/v1/auth/users/` & `/auth/users/<id>/` | `GET`/`POST`/`PATCH`/`DELETE` | Allowed | 403 | 403 |
+| `/api/v1/organizations/` (list/retrieve) | `GET` | Allowed | Allowed (own orgs) | Allowed (own orgs) |
+| `/api/v1/organizations/` (write) & `/members/` | `GET`/`POST`/`PATCH`/`DELETE` | Allowed | 403 | 403 |
+| `/api/v1/projects/` & `/projects/<id>/pages/` | `GET` | Allowed | Allowed (own org) | Allowed (own org) |
+| `/api/v1/projects/` (create/edit/delete) | `POST`/`PATCH`/`DELETE` | Allowed | 403 | 403 |
+| `/api/v1/project-sources/` | `GET` | Allowed | Allowed (own org) | Allowed (own org) |
+| `/api/v1/project-sources/` (direct path POST) | `POST` | **405 Disabled** | **405 Disabled** | 403 |
+| `/api/v1/project-sources/upload/` | `POST` (multipart) | Allowed | Allowed (own org) | 403 |
+| `/api/v1/project-sources/<id>/` | `PATCH`/`DELETE` | Allowed | 403 | 403 |
+| `/api/v1/extraction/` & `/<id>/logs/` | `GET` | Allowed | Allowed (own org) | Allowed (own org) |
+| `/api/v1/extraction/` (trigger/re-run) | `POST` | Allowed | Allowed (own org) | 403 |
+| `/api/v1/extraction/<id>/cancel/`, `<id>/` | `POST`/`DELETE` | Allowed | 403 | 403 |
+| `/api/v1/source-inventory/`, `/cad-bim/`, `/objects/`, `/hierarchy/`, `/measurements/`, `/geometry/`, `/formulas/`, `/assemblies/`, `/classifications/`, `/components/`, `/annotations/`, `/validation/`, `/reconciliation/`, `/integrations/` | `GET` | Allowed | Allowed (own org) | Allowed (own org) |
+| `/api/v1/estimation/sessions/` (`list`, `create`, `update-quotation`, `approve`, `export-excel`, `export-pdf`) | All | Allowed | 403 | 403 |
+| `/api/v1/exports/<project_id>/` (`json`, `jsonl`, `csv`, `xlsx`, `geojson`) | `GET` | Allowed | 403 | 403 |
+| `/api/v1/ai/`, `/retrieval/`, `/audit/`, `/notifications/` | All | Allowed | 403 | 403 |

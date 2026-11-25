@@ -50,7 +50,7 @@ export default function AuditPage() {
               type="button"
               onClick={() => setCategory(c.id)}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                category === c.id ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                category === c.id ? "bg-[#0052cc] text-white" : "bg-slate-100 text-[#475569] hover:bg-slate-200"
               }`}
             >
               {c.label}

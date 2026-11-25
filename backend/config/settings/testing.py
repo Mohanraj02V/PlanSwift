@@ -16,4 +16,6 @@ CELERY_TASK_ALWAYS_EAGER = True
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {  # noqa: F405
     "anon": "10000/minute",
     "user": "10000/minute",
+    "auth_login": "10/minute",
+    "auth_refresh": "30/minute",
 }

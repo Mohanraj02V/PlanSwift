@@ -4,7 +4,7 @@ from rest_framework import generics, permissions, serializers
 
 from apps.audit_logs.models import AuditLog
 from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import IsOrgAdminOnly, get_user_org_ids, is_org_admin_user
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -48,21 +48,20 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
 
 class AuditLogListView(generics.ListAPIView):
-    permission_classes = [permissions.IsAuthenticated, IsOrgAdminOnly]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
     serializer_class = AuditLogSerializer
     filterset_fields = ["action", "resource_type", "organization"]
     search_fields = ["action", "resource_type", "resource_id", "actor__email"]
 
     def get_queryset(self):
-        org_ids = get_user_org_ids(self.request.user)
+        org_ids = get_user_admin_org_ids(self.request.user)
         qs = AuditLog.objects.select_related("actor", "organization")
-        if is_org_admin_user(self.request.user):
-            member_user_ids = list(
-                OrganizationMember.objects.filter(organization_id__in=org_ids).values_list("user_id", flat=True)
-            )
-            qs = qs.filter(Q(organization_id__in=org_ids) | Q(organization__isnull=True, actor_id__in=member_user_ids))
-        else:
-            qs = qs.filter(organization_id__in=org_ids)
+        if getattr(self.request.user, "is_superuser", False):
+            return qs
+        member_user_ids = list(
+            OrganizationMember.objects.filter(organization_id__in=org_ids).values_list("user_id", flat=True)
+        )
+        qs = qs.filter(Q(organization_id__in=org_ids) | Q(organization__isnull=True, actor_id__in=member_user_ids))
 
         category = (self.request.query_params.get("category") or "").strip().lower()
         if category == "uploads":

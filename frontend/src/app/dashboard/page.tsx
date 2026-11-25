@@ -56,9 +56,9 @@ export default function DashboardPage() {
           <div className="mt-1 text-2xl font-bold text-emerald-700">{completedRuns} completed</div>
           <div className="mt-1 text-xs text-rose-600">{failedRuns} failed</div>
         </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs font-medium text-slate-500">Latest Validation</div>
-          <div className="mt-1 text-2xl font-bold text-blue-700">
+        <div className="rounded-xl border border-[#e2e8f0] bg-white p-4">
+          <div className="text-xs font-semibold text-[#64748b]">Latest Validation</div>
+          <div className="mt-1 text-2xl font-bold text-[#0052cc]">
             {latestVal ? `${latestVal.overall_verified_accuracy_pct}%` : "—"}
           </div>
           <div className="mt-1 text-xs text-slate-500">

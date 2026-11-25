@@ -4,13 +4,14 @@ Vortexen Estimator integrates mature, unmodified upstream open-source libraries 
 
 ---
 
-## CAD / BIM Extraction & Performance Dependencies Added
+## CAD / BIM Extraction, Document Export & Performance Dependencies
 
-| Package | Exact Installed Version | License | Role & Scope | Project URL |
+| Package | Installed / Declared Version | License | Role & Scope | Project URL |
 |---|---|---|---|---|
 | `ezdxf` | `1.4.5` | MIT License | **Runtime** — ASCII & Binary DXF reader (`ezdxf.readfile`, `ezdxf.recover.readfile`), block/INSERT transform math (`Matrix44`, `OCS`), curve path flattening (`make_path`) | https://github.com/mozman/ezdxf |
 | `ifcopenshell` | `0.9.0.post1` | LGPL-3.0-or-later | **Runtime** — IFC2X3 / IFC4 / IFC4X3 STEP parser, `ifcopenshell.util.*` (element, unit, placement, shape), bounded `ifcopenshell.geom.iterator` | http://ifcopenshell.org |
-| `psutil` | `7.2.2` | BSD-3-Clause | **Runtime / Benchmarking** — OS-level process RSS memory measurement (`psutil.Process.memory_info().rss`) covering C++/Cython native heaps | https://github.com/giampaolo/psutil |
+| `reportlab` | `5.1.0` | BSD License | **Runtime** — Dynamic multi-page A4 commercial quotation PDF generation embedding official Vortexen branding | https://www.reportlab.com |
+| `psutil` | `7.2.2` | BSD-3-Clause | **Runtime / Benchmarking** — OS-level process RSS memory measurement (`psutil.Process.memory_info().rss`) | https://github.com/giampaolo/psutil |
 
 ### Transitive Dependencies Pulled by `ezdxf` & `ifcopenshell`
 
@@ -25,9 +26,11 @@ Vortexen Estimator integrates mature, unmodified upstream open-source libraries 
 
 ---
 
-## Core Platform Dependencies (Pre-Existing)
+## Core Platform Dependencies
 
-- `pydantic`, `lxml`, `defusedxml`, `openpyxl`, `Django`, `djangorestframework`, `celery`, `redis`, `pytest` (standard permissive/open-source licenses declared in `extraction_engine/pyproject.toml` and `backend/requirements.txt`).
+- Backend (`backend/requirements.txt`): `Django`, `djangorestframework`, `djangorestframework-simplejwt`, `django-cors-headers`, `django-filter`, `drf-spectacular`, `pydantic`, `lxml`, `celery`, `redis`, `psycopg[binary]`, `openpyxl`, `reportlab`, `httpx`, `whitenoise`, `gunicorn`.
+- Dev/Test Only (`backend/requirements-dev.txt`): `pytest`, `pytest-django` (excluded from runtime production containers).
+- Frontend (`frontend/package.json`): `next`, `react`, `react-dom`, `lucide-react`, `zod`.
 
 ---
 

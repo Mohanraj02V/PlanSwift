@@ -6,8 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.audit_logs.services import log_audit_event
-from apps.organizations.models import OrganizationMember
-from apps.permissions.rbac import IsOrgEditor, IsOrgMember, get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, IsOrgMember, get_user_org_ids, is_admin
 from apps.projects.models import Project, ProjectPage, ProjectVersion
 from apps.projects.serializers import ProjectPageSerializer, ProjectSerializer
 
@@ -28,18 +27,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy"):
-            return [permissions.IsAuthenticated(), IsOrgEditor()]
+            return [permissions.IsAuthenticated(), IsAdminOnly()]
         return [permissions.IsAuthenticated(), IsOrgMember()]
 
     def create(self, request, *args, **kwargs):
         org_id = request.data.get("organization")
-        if not OrganizationMember.objects.filter(
-            organization_id=org_id,
-            user=request.user,
-            is_active=True,
-            role__in=IsOrgEditor.ALLOWED_ROLES,
-        ).exists():
-            return Response({"detail": "You do not have editor permissions in this organization."}, status=status.HTTP_403_FORBIDDEN)
+        if not org_id or not is_admin(request.user, org_id):
+            return Response({"detail": "Organization Admin privileges required to create projects."}, status=status.HTTP_403_FORBIDDEN)
         return super().create(request, *args, **kwargs)
 
     @transaction.atomic

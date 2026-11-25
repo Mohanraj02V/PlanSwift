@@ -1,8 +1,8 @@
 from django.urls import path
-from rest_framework import generics, serializers
+from rest_framework import generics, permissions, serializers
 
 from apps.notifications.models import Notification
-from apps.permissions.rbac import get_user_org_ids
+from apps.permissions.rbac import IsAdminOnly, get_user_admin_org_ids
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -12,10 +12,11 @@ class NotificationSerializer(serializers.ModelSerializer):
 
 
 class NotificationListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOnly]
     serializer_class = NotificationSerializer
 
     def get_queryset(self):
-        org_ids = get_user_org_ids(self.request.user)
+        org_ids = get_user_admin_org_ids(self.request.user)
         return Notification.objects.filter(organization_id__in=org_ids)
 
 

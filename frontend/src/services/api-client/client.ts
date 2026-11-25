@@ -1,4 +1,4 @@
-import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/services/authentication/auth";
+import { ensureCsrfCookie, getCsrfToken } from "@/services/authentication/auth";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000/api/v1";
@@ -14,33 +14,29 @@ export class ApiClientError extends Error {
   }
 }
 
-let inflightRefreshPromise: Promise<string | null> | null = null;
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-async function tryRefreshAccessToken(): Promise<string | null> {
+let inflightRefreshPromise: Promise<boolean> | null = null;
+
+async function tryRefreshSession(): Promise<boolean> {
   if (inflightRefreshPromise) {
     return inflightRefreshPromise;
   }
-  const refresh = getRefreshToken();
-  if (!refresh) return null;
   inflightRefreshPromise = (async () => {
     try {
+      const csrf = (await ensureCsrfCookie()) || "";
       const resp = await fetch(`${API_BASE_URL}/auth/refresh/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh }),
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(csrf ? { "X-CSRFToken": csrf } : {}),
+        },
+        body: JSON.stringify({}),
       });
-      if (!resp.ok) {
-        clearAuthTokens();
-        return null;
-      }
-      const data = await resp.json();
-      if (data.access) {
-        setAuthTokens(data.access, data.refresh);
-        return data.access as string;
-      }
-      return null;
+      return resp.ok;
     } catch {
-      return null;
+      return false;
     } finally {
       inflightRefreshPromise = null;
     }
@@ -49,23 +45,29 @@ async function tryRefreshAccessToken(): Promise<string | null> {
 }
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}, retryOn401 = true): Promise<T> {
-  const token = getAccessToken();
+  const method = (options.method || "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string> | undefined),
   };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+
+  if (UNSAFE_METHODS.has(method)) {
+    const csrf = (await ensureCsrfCookie()) || getCsrfToken();
+    if (csrf) {
+      headers["X-CSRFToken"] = csrf;
+    }
   }
 
   const resp = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    method,
+    credentials: "include",
     headers,
   });
 
   if (resp.status === 401 && retryOn401 && !path.startsWith("/auth/")) {
-    const newAccess = await tryRefreshAccessToken();
-    if (newAccess) {
+    const refreshed = await tryRefreshSession();
+    if (refreshed) {
       return apiRequest<T>(path, options, false);
     }
   }
@@ -89,10 +91,17 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, ret
 }
 
 export async function downloadExportFile(projectId: string, exportFormat: string): Promise<Blob> {
-  const token = getAccessToken();
-  const resp = await fetch(`${API_BASE_URL}/exports/${projectId}/?export_format=${encodeURIComponent(exportFormat)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  let resp = await fetch(`${API_BASE_URL}/exports/${projectId}/?export_format=${encodeURIComponent(exportFormat)}`, {
+    credentials: "include",
   });
+  if (resp.status === 401) {
+    const ok = await tryRefreshSession();
+    if (ok) {
+      resp = await fetch(`${API_BASE_URL}/exports/${projectId}/?export_format=${encodeURIComponent(exportFormat)}`, {
+        credentials: "include",
+      });
+    }
+  }
   if (!resp.ok) {
     throw new ApiClientError(`Export failed (${resp.status})`, resp.status);
   }
@@ -105,21 +114,26 @@ export async function downloadEstimationDocument(
   quotationOverride?: Record<string, unknown>
 ): Promise<Blob> {
   const action = kind === "excel" ? "export-excel" : "export-pdf";
-  const performFetch = (token: string | null) =>
-    fetch(`${API_BASE_URL}/estimation/sessions/${sessionId}/${action}/`, {
+  const performFetch = async () => {
+    const headers: Record<string, string> = {};
+    if (quotationOverride) {
+      headers["Content-Type"] = "application/json";
+      const csrf = (await ensureCsrfCookie()) || getCsrfToken();
+      if (csrf) headers["X-CSRFToken"] = csrf;
+    }
+    return fetch(`${API_BASE_URL}/estimation/sessions/${sessionId}/${action}/`, {
       method: quotationOverride ? "POST" : "GET",
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(quotationOverride ? { "Content-Type": "application/json" } : {}),
-      },
+      credentials: "include",
+      headers,
       body: quotationOverride ? JSON.stringify({ quotation: quotationOverride }) : undefined,
     });
+  };
 
-  let resp = await performFetch(getAccessToken());
+  let resp = await performFetch();
   if (resp.status === 401) {
-    const newAccess = await tryRefreshAccessToken();
-    if (newAccess) {
-      resp = await performFetch(newAccess);
+    const ok = await tryRefreshSession();
+    if (ok) {
+      resp = await performFetch();
     }
   }
   if (!resp.ok) {
@@ -139,19 +153,20 @@ export interface ZipUploadResult {
   extraction_runs?: import("@/types/api").ExtractionRun[];
 }
 
-export function uploadProjectZipWithProgress(
+export async function uploadProjectZipWithProgress(
   projectId: string,
   file: File,
   autoExtract: boolean,
   onProgress: (pct: number) => void,
   extractGeometry = false
 ): Promise<ZipUploadResult> {
+  const csrf = (await ensureCsrfCookie()) || getCsrfToken();
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE_URL}/project-sources/upload/`);
-    const token = getAccessToken();
-    if (token) {
-      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.withCredentials = true;
+    if (csrf) {
+      xhr.setRequestHeader("X-CSRFToken", csrf);
     }
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable && ev.total > 0) {
@@ -171,7 +186,7 @@ export function uploadProjectZipWithProgress(
         reject(new ApiClientError(`Upload failed (${xhr.status})`, xhr.status));
       }
     };
-    xhr.onerror = () => reject(new ApiClientError("Network error during ZIP upload.", 0));
+    xhr.onerror = () => reject(new ApiClientError("Network error during upload.", 0));
     const form = new FormData();
     form.append("project", projectId);
     form.append("auto_extract", autoExtract ? "true" : "false");
